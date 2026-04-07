@@ -1,0 +1,278 @@
+@import "tailwindcss";
+
+/* ============================================
+   ROOT & ANIMATION VARIABLES
+   ============================================ */
+
+:root {
+  /* Typography & Rendering */
+  color-scheme: light;
+  font-family: 'Prompt', sans-serif;
+  font-size: 18px;
+  line-height: 1.45;
+  letter-spacing: 0.18px;
+  color: #1c1b1f;
+  background: #ffffff;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+
+  /* Animation Timings (shared with App.css) */
+  --duration-fast: 150ms;
+  --duration-normal: 300ms;
+  --duration-slow: 500ms;
+  --easing-smooth: cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+/* ============================================
+   BASE LAYOUT & HTML ELEMENTS
+   ============================================ */
+
+html,
+body,
+#root {
+  min-height: 100%;
+}
+
+body {
+  margin: 0;
+  background: #fff5fb;
+  color: #44263c;
+  transition: background-color var(--duration-normal) var(--easing-smooth);
+}
+
+/* ============================================
+   FONT FAMILIES
+   ============================================ */
+
+.plus-jakarta-sans {
+  font-family: 'Plus Jakarta Sans', sans-serif;
+}
+
+/* ============================================
+   MATERIAL SYMBOLS ICON SETUP
+   ============================================ */
+
+.material-symbols-outlined {
+  font-family: 'Material Symbols Outlined';
+  font-weight: normal;
+  font-style: normal;
+  font-size: 24px;
+  display: inline-flex;
+  line-height: 1;
+  text-transform: none;
+  letter-spacing: normal;
+  word-wrap: normal;
+  white-space: nowrap;
+  direction: ltr;
+  font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 24;
+  transition: transform var(--duration-fast) var(--easing-smooth);
+}
+
+.material-symbols-outlined:hover {
+  transform: scale(1.1);
+}
+
+/* ============================================
+   GLOBAL ANIMATIONS
+   ============================================ */
+
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes fadeInUp {
+  from {
+    opacity: 0;
+    transform: translateY(12px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes slideInLeft {
+  from {
+    opacity: 0;
+    transform: translateX(-12px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+@keyframes slideInRight {
+  from {
+    opacity: 0;
+    transform: translateX(12px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+@keyframes scaleIn {
+  from {
+    opacity: 0;
+    transform: scale(0.95);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+@keyframes pulse {
+  0%, 100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.5;
+  }
+}
+
+@keyframes shimmer {
+  0% {
+    background-position: -1200px 0;
+  }
+  100% {
+    background-position: 1200px 0;
+  }
+}
+
+/* ============================================
+   UTILITY ANIMATION CLASSES
+   ============================================ */
+
+.animate-fade-in {
+  animation: fadeIn var(--duration-normal) var(--easing-smooth);
+}
+
+.animate-fade-in-up {
+  animation: fadeInUp var(--duration-normal) var(--easing-smooth);
+}
+
+.animate-slide-in-left {
+  animation: slideInLeft var(--duration-normal) var(--easing-smooth);
+}
+
+.animate-slide-in-right {
+  animation: slideInRight var(--duration-normal) var(--easing-smooth);
+}
+
+.animate-scale-in {
+  animation: scaleIn var(--duration-normal) var(--easing-smooth);
+}
+
+.animate-pulse {
+  animation: pulse var(--duration-slow) var(--easing-smooth) infinite;
+}
+
+.animate-shimmer {
+  animation: shimmer 2s var(--easing-smooth) infinite;
+}
+
+/* ============================================
+   FOCUS STATES - PROFESSIONAL DOUBLE-RING
+   ============================================ */
+
+.focus-primary:focus {
+  outline: 2px solid transparent;
+  outline-offset: 2px;
+  box-shadow: 0 0 0 4px #ffffff, 0 0 0 7px #db2777;
+  border-color: #db2777;
+  transition: all var(--duration-fast) var(--easing-smooth);
+}
+
+.focus-danger:focus {
+  outline: 2px solid transparent;
+  outline-offset: 2px;
+  box-shadow: 0 0 0 4px #ffffff, 0 0 0 7px #be123c;
+  border-color: #be123c;
+  transition: all var(--duration-fast) var(--easing-smooth);
+}
+
+.focus-muted:focus {
+  outline: 2px solid transparent;
+  outline-offset: 2px;
+  box-shadow: 0 0 0 4px #ffffff, 0 0 0 7px #64748b;
+  border-color: #64748b;
+  transition: all var(--duration-fast) var(--easing-smooth);
+}
+
+/* Inputs with focus ring effect */
+input:focus:not([type="hidden"]) {
+  outline: 2px solid transparent;
+  outline-offset: 2px;
+}
+
+input[type="text"]:focus,
+input[type="number"]:focus {
+  box-shadow: 0 0 0 4px #ffffff, 0 0 0 7px #db2777;
+  transition: all var(--duration-fast) var(--easing-smooth);
+}
+
+/* Buttons with focus ring effect */
+button:focus-visible {
+  outline: 2px solid transparent;
+  outline-offset: 2px;
+  box-shadow: 0 0 0 4px #ffffff, 0 0 0 7px #db2777;
+  transition: all var(--duration-fast) var(--easing-smooth);
+}
+
+/* Links with focus ring effect */
+a:focus-visible {
+  outline: 2px solid transparent;
+  outline-offset: 2px;
+  box-shadow: 0 0 0 4px #ffffff, 0 0 0 7px #db2777;
+  border-radius: 4px;
+  transition: all var(--duration-fast) var(--easing-smooth);
+}
+
+.btn-delete-animate {
+    @apply relative overflow-hidden inline-flex 
+          transition-all duration-300 z-10 bg-transparent cursor-pointer;
+    
+    /* ดึงค่าสีจาก config ที่คุณตั้งไว้ (primary/error) */ /* หรือใช้ var(--color-error) */
+    color: #be123c;
+  }
+
+  /* ตัวพื้นหลังที่จะวิ่งออกมา */
+  .btn-delete-animate::before {
+    content: "";
+    @apply absolute left-0 top-0 w-full h-full -z-10 transition-transform duration-300;
+    background-color: #be123c;
+    transform: translateX(-101%);
+  }
+
+  /* จังหวะที่เอาเมาส์ไปชี้ (Hover) */
+  .btn-delete-animate:hover {
+    @apply text-white;
+  }
+
+  .btn-delete-animate:hover::before {
+    transform: translateX(0);
+  }
+
+  .btn-press-bounce {
+    @apply transition-all duration-150 ease-[cubic-bezier(0.34,1.56,0.64,1)];
+  }
+  
+  .btn-press-bounce:active {
+    transform: scale(0.9);
+  }
+
+  /* เอฟเฟกต์สีวิ่งกระจาย (Ripple-ish) เมื่อ Hover */
+  .hover-primary-glow:hover {
+    @apply shadow-[0_0_20px_var(--color-shadow)];
+    background-color: var(--color-primary);
+    color: white;
+  }

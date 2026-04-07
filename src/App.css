@@ -1,0 +1,167 @@
+
+/* ============================================
+   COLOR SYSTEM & TYPOGRAPHY
+   ============================================ */
+
+:root {
+  /* Base Colors */
+  --color-background: #fff5fb;
+  --color-text: #44263c;
+  --color-surface: #ffffff;
+  --color-surface-soft: #fff0f7;
+  --color-surface-strong: #f7d6ea;
+
+  /* Primary Palette */
+  --color-primary: #db2777;
+  --color-primary-dark: #be185d;
+  --color-primary-darker: #9d174d;
+  --color-primary-soft: #fecdd3;
+
+  /* Semantic Colors */
+  --color-danger: #be123c;
+  --color-danger-soft: #fecdd3;
+  --color-muted: #64748b;
+  --color-muted-light: #94a3b8;
+  --color-white: #ffffff;
+
+  /* Borders & Shadows */
+  --color-border-soft: #f4d4e7;
+  --color-border-surface: #f9d6e9;
+  --color-shadow: rgba(219, 39, 119, 0.15);
+
+  /* Animation Timings */
+  --duration-fast: 150ms;
+  --duration-normal: 300ms;
+  --easing-smooth: cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+/* ============================================
+   BASE STYLES
+   ============================================ */
+
+body {
+  margin: 0;
+  background: var(--color-background);
+  color: var(--color-text);
+  font-family: 'Plus Jakarta Sans', sans-serif;
+}
+
+/* ============================================
+   UTILITIES
+   ============================================ */
+
+/* Background Colors */
+.bg-base { background-color: var(--color-background); }
+.bg-surface { background-color: var(--color-surface); }
+.bg-surface-soft { background-color: var(--color-surface-soft); }
+.bg-surface-strong { background-color: var(--color-surface-strong); }
+.bg-surface-soft-alpha { background-color: rgba(255, 240, 247, 0.55); }
+.bg-primary { background-color: var(--color-primary); }
+.bg-primary-soft { background-color: var(--color-primary-soft); }
+.bg-danger { background-color: var(--color-danger); }
+.bg-danger-soft { background-color: var(--color-danger-soft); }
+
+/* Text Colors */
+.text-base { color: var(--color-text); }
+.text-muted { color: var(--color-muted); }
+.text-muted-light { color: var(--color-muted-light); }
+.text-primary { color: var(--color-primary); }
+.text-primary-strong { color: var(--color-primary-dark); }
+.text-danger { color: var(--color-danger); }
+.text-white { color: var(--color-white); }
+
+/* Border Colors */
+.border-soft { border-color: var(--color-border-soft); }
+.border-surface { border-color: var(--color-border-surface); }
+.border-danger-soft { border-color: var(--color-danger-soft); }
+
+/* Shadow */
+.shadow-soft { box-shadow: 0 20px 60px var(--color-shadow); }
+
+/* ============================================
+   INTERACTIVE STATES
+   ============================================ */
+
+.hover-bg-primary:hover { background-color: var(--color-primary); }
+.hover-bg-danger:hover { background-color: var(--color-danger); }
+
+.focus-primary:focus {
+  outline: 2px solid transparent;
+  outline-offset: 2px;
+  box-shadow: 0 0 0 4px var(--color-surface), 0 0 0 7px var(--color-primary);
+}
+
+.focus-danger:focus {
+  outline: 2px solid transparent;
+  outline-offset: 2px;
+  box-shadow: 0 0 0 4px var(--color-surface), 0 0 0 7px var(--color-danger);
+}
+
+/* ============================================
+   BUTTON ANIMATIONS
+   ============================================ */
+
+.btn-danger-animate {
+  position: relative;
+  overflow: hidden;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 2px solid var(--color-danger);
+  background: transparent;
+  color: var(--color-danger);
+  transition: color var(--duration-normal) var(--easing-smooth);
+  z-index: 1;
+}
+
+.btn-danger-animate::before {
+  content: "";
+  position: absolute;
+  width: 100%;
+  height: 100%;
+  background-color: var(--color-danger);
+  transform: translateX(-100%);
+  transition: transform var(--duration-normal) var(--easing-smooth);
+  z-index: -1;
+}
+
+.btn-danger-animate:hover {
+  color: var(--color-white);
+}
+
+.btn-danger-animate:hover::before {
+  transform: translateX(0);
+}
+
+.btn-primary-animate {
+  position: relative;
+  overflow: hidden;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 2px solid var(--color-primary);
+  background: transparent;
+  color: var(--color-primary);
+  transition: color var(--duration-normal) var(--easing-smooth);
+  z-index: 1;
+}
+
+.btn-primary-animate::before {
+  content: "";
+  position: absolute;
+  width: 100%;
+  height: 100%;
+  background-color: var(--color-primary);
+  transform: translateX(-100%);
+  transition: transform var(--duration-normal) var(--easing-smooth);
+  z-index: -1;
+}
+
+.btn-primary-animate:hover {
+  color: var(--color-white);
+}
+
+.btn-primary-animate:hover::before {
+  transform: translateX(0);
+}
+

@@ -1,0 +1,83 @@
+import type { CartItem } from '../types';
+
+interface CartTableProps {
+  cart: CartItem[];
+  updateQuantity: (id: string, delta: number) => void;
+  removeItem: (id: string) => void;
+  containerClassName?: string;
+  rowClassName?: string;
+  buttonClassName?: string;
+}
+
+export default function CartTable({
+  cart,
+  updateQuantity,
+  removeItem,
+  containerClassName = '',
+  rowClassName = '',
+  buttonClassName = '',
+}: CartTableProps) {
+  return (
+    <section className={`flex-1 min-h-0 overflow-x-auto animate-fade-in-up bg-surface-soft rounded-2xl ${containerClassName}`}>
+      <div className="bg-surface rounded-2xl border border-soft overflow-hidden transition-all duration-300 flex flex-col h-full">
+        <div className="min-h-0 overflow-auto flex-1">
+          <table className="w-full text-left border-collapse">
+          <thead className="bg-surface-soft border-b border-soft">
+            <tr>
+              <th className="px-6 py-4 text-sm font-bold text-muted">รายการสินค้า</th>
+              <th className="px-6 py-4 text-sm font-bold text-muted text-center">จำนวน</th>
+              <th className="px-6 py-4 text-sm font-bold text-muted text-right">ราคา/หน่วย</th>
+              <th className="px-6 py-4 text-sm font-bold text-muted text-right">รวม</th>
+              <th className="px-6 py-4 text-sm font-bold text-muted text-center w-24">ลบ</th>
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-slate-100">
+            {cart.map((item, index) => (
+              <tr 
+                key={item.id} 
+                className={`hover:bg-primary-soft/30 transition-all duration-300 hover:shadow-md ${rowClassName}`}
+                style={{ animationDelay: `${index * 50}ms` }}
+              >
+                <td className="px-6 py-5 font-bold text-lg">
+                  {item.name}
+                  <div className="text-xs text-muted-light font-normal">{item.barcode}</div>
+                </td>
+                <td className="px-6 py-5">
+                  <div className="flex items-center justify-center gap-3">
+                    <button
+                      onClick={() => updateQuantity(item.id, -1)}
+                      className={`w-10 h-10 rounded-full bg-surface-soft flex items-center justify-center text-xl font-bold transition-all duration-200 hover:bg-primary hover:scale-110 active:scale-95 ${buttonClassName}`}
+                      aria-label="Decrease quantity"
+                    >
+                      -
+                    </button>
+                    <span className="text-xl font-bold w-6 text-center">{item.quantity}</span>
+                    <button
+                      onClick={() => updateQuantity(item.id, 1)}
+                      className={`w-10 h-10 rounded-full bg-surface-soft flex items-center justify-center text-xl font-bold transition-all duration-200 hover:bg-primary-soft hover:scale-110 active:scale-95 ${buttonClassName}`}
+                      aria-label="Increase quantity"
+                    >
+                      +
+                    </button>
+                  </div>
+                </td>
+                <td className="px-6 py-5 text-right font-semibold">฿{item.price.toFixed(2)}</td>
+                <td className="px-6 py-5 text-right font-black text-primary text-xl">฿{(item.price * item.quantity).toFixed(2)}</td>
+                <td className="px-6 py-5 text-center">
+                  <button
+                    onClick={() => removeItem(item.id)}
+                    className={`w-12 h-12 rounded-xl bg-danger-soft transition-all duration-200 btn-delete-animate hover:text-white hover:scale-110 active:scale-95 flex items-center justify-center mx-auto`}
+                    aria-label="Delete item"
+                  >
+                    <span className="material-symbols-outlined text-2xl hover:text-white">delete</span>
+                  </button>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+  );
+}
