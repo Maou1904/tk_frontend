@@ -15,6 +15,7 @@ interface Product {
   name: string;
   price: string;
   stock: number;
+  barcode: string;
 }
 
 function App() {
@@ -36,9 +37,9 @@ function App() {
       return [...prev, {
         id: product.id.toString(),
         name: product.name,
-        barcode: `BC-${product.id}`, // สมมติบาร์โค้ดไปก่อน
+        barcode: product.barcode.toString(), // สมมติบาร์โค้ดไปก่อน
         price: parseFloat(product.price),
-        quantity: 1
+        quantity: 2
       }];
     });
   };
@@ -80,9 +81,9 @@ function App() {
         const testItems: CartItem[] = dbProducts.map(p => ({
           id: p.id.toString(),
           name: p.name,
-          barcode: `NO-BARCODE-${p.id}`, // ในเมื่อไม่มี barcode ก็ใช้ ID แก้ขัดไปก่อน
+          barcode: p.barcode.toString(),
           price: parseFloat(p.price),
-          quantity: 1 // ใส่ไว้ 1 ชิ้นก่อนเพื่อเทส
+          quantity: 2 // ใส่ไว้ 1 ชิ้นก่อนเพื่อเทส
         }));
 
         setCart(testItems); // อัปเดตตระกร้าด้วยข้อมูลจาก Database
