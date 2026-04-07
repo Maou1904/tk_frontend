@@ -1,4 +1,3 @@
-import type { ReactNode } from 'react';
 import SidebarItem from './SidebarItem';
 
 interface SidebarProps {
