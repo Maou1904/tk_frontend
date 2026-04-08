@@ -4,4 +4,5 @@ export interface CartItem {
   barcode: string;
   price: number;
   quantity: number;
+  discount: number;
 }

@@ -20,8 +20,8 @@ interface Product {
 
 function App() {
   const [cart, setCart] = useState<CartItem[]>([
-    { id: '1', name: 'ข้าวหอมมะลิ 5 กก.', barcode: 'BC-9921002', price: 185, quantity: 2 },
-    { id: '2', name: 'น้ำมันพืช ตราองุ่น 1 ลิตร', barcode: 'BC-1120034', price: 45, quantity: 1 },
+    { id: '1', name: 'ข้าวหอมมะลิ 5 กก.', barcode: 'BC-9921002', price: 185, quantity: 2 , discount: 0},
+    { id: '2', name: 'น้ำมันพืช ตราองุ่น 1 ลิตร', barcode: 'BC-1120034', price: 45, quantity: 1 , discount: 0},
   ]);
 
   const addToCart = (product: Product) => {
@@ -39,6 +39,7 @@ function App() {
         name: product.name,
         barcode: product.barcode.toString(), // สมมติบาร์โค้ดไปก่อน
         price: parseFloat(product.price),
+        discount: 0,
         quantity: 2
       }];
     });
@@ -67,8 +68,26 @@ function App() {
     console.log('Print receipt');
   };
 
+  const updateItemDiscount = (id: string, discountValue: number) => {
+  setCart(prev => prev.map(item =>
+    item.id === id ? { ...item, discount: Math.max(0, discountValue) } : item
+  ));
+};
+
   const subtotal = useMemo(() => cart.reduce((sum, item) => sum + (item.price * item.quantity), 0), [cart]);
-  const total = Math.max(0, subtotal - discount);
+  
+  // คำนวณราคารวมทั้งหมด (Net Total)
+  const total = useMemo(() => {
+    return cart.reduce((sum, item) => {
+      // สูตร: (ราคา x จำนวน) - ส่วนลดของชิ้นนั้น
+      const itemTotal = (item.price * item.quantity) - (item.discount || 0);
+      return sum + Math.max(0, itemTotal); // กันติดลบ
+    }, 0);
+  }, [cart]);
+
+  const totalDiscount = useMemo(() => {
+    return cart.reduce((sum, item) => sum + (item.discount || 0), 0);
+  }, [cart]);
 
   useEffect(() => {
     // 1. ดึงข้อมูลจาก Backend
@@ -83,7 +102,8 @@ function App() {
           name: p.name,
           barcode: p.barcode.toString(),
           price: parseFloat(p.price),
-          quantity: 2 // ใส่ไว้ 1 ชิ้นก่อนเพื่อเทส
+          quantity: 2, // ใส่ไว้ 1 ชิ้นก่อนเพื่อเทส
+          discount: 0 // ใส่ค่าเริ่มต้นสำหรับส่วนลด
         }));
 
         setCart(testItems); // อัปเดตตระกร้าด้วยข้อมูลจาก Database
@@ -121,6 +141,7 @@ function App() {
             <CartTable 
               cart={cart}
               updateQuantity={updateQuantity}
+              updateDiscount={updateItemDiscount} // ต้องส่งฟังก์ชันนี้เข้าไป
               removeItem={removeItem}
               containerClassName="flex-[6] min-w-0"
             />
@@ -129,8 +150,7 @@ function App() {
             <PaymentSummary
               subtotal={subtotal}
               total={total}
-              discount={discount}
-              onDiscountChange={setDiscount}
+              totalDiscount={totalDiscount}
               containerClassName="flex-[4] min-w-0"
             />
           </div>
