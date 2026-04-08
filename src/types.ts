@@ -5,4 +5,5 @@ export interface CartItem {
   price: number;
   quantity: number;
   discount: number;
+  item_type: 'PRODUCT' | 'GAS' | 'LOTTERY' | 'TOPUP';
 }

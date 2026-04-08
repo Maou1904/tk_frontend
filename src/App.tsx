@@ -20,9 +20,9 @@ interface Product {
 
 function App() {
   const [cart, setCart] = useState<CartItem[]>([
-    { id: '1', name: 'ข้าวหอมมะลิ 5 กก.', barcode: 'BC-9921002', price: 185, quantity: 2 , discount: 0},
-    { id: '2', name: 'น้ำมันพืช ตราองุ่น 1 ลิตร', barcode: 'BC-1120034', price: 45, quantity: 1 , discount: 0},
   ]);
+
+  const [currentView, setCurrentView] = useState('POS');
 
   const addToCart = (product: Product) => {
     setCart(prev => {
@@ -40,7 +40,8 @@ function App() {
         barcode: product.barcode.toString(), // สมมติบาร์โค้ดไปก่อน
         price: parseFloat(product.price),
         discount: 0,
-        quantity: 2
+        quantity: 2,
+        item_type: 'PRODUCT'
       }];
     });
   };
@@ -102,8 +103,9 @@ function App() {
           name: p.name,
           barcode: p.barcode.toString(),
           price: parseFloat(p.price),
-          quantity: 2, // ใส่ไว้ 1 ชิ้นก่อนเพื่อเทส
-          discount: 0 // ใส่ค่าเริ่มต้นสำหรับส่วนลด
+          quantity: 1, // ใส่ไว้ 1 ชิ้นก่อนเพื่อเทส
+          discount: 0, // ใส่ค่าเริ่มต้นสำหรับส่วนลด
+          item_type: 'PRODUCT' // ใส่ค่าเริ่มต้นสำหรับประเภทสินค้า
         }));
 
         setCart(testItems); // อัปเดตตระกร้าด้วยข้อมูลจาก Database
@@ -116,7 +118,10 @@ function App() {
   return (
     <div className="antialiased overflow-hidden min-h-screen flex flex-col md:flex-row">
       {/* Sidebar Navigation */}
-      <Sidebar></Sidebar>
+      <Sidebar 
+        currentView={currentView}
+        onViewChange={setCurrentView}
+      />
 
       <div className="flex-1 flex flex-col">
         {/* Top Navigation Header */}
@@ -128,39 +133,49 @@ function App() {
 
         {/* Main Content */}
         <main className="flex-1 flex flex-col overflow-hidden">
-          {/* Scan Section */}
-          <ScanSection 
-            barcodeLabel="ยิงบาร์โค้ดสินค้า (Scan Barcode)"
-            phoneLabel="เบอร์โทรศัพท์ลูกค้า (Member Search)"
-            containerClassName="bg-surface"
-          />
+          {/* ส่วนที่เปลี่ยนไปตามหน้า (Dynamic Content) */}
+          {currentView === 'POS' ? (
+            <>
+              <ScanSection 
+                barcodeLabel="ยิงบาร์โค้ดสินค้า (Scan Barcode)"
+                phoneLabel="เบอร์โทรศัพท์ลูกค้า (Member Search)"
+              />
+              <div className="flex-1 flex gap-6 p-6 overflow-hidden min-h-0">
+                <CartTable 
+                  cart={cart}
+                  updateQuantity={updateQuantity}
+                  updateDiscount={updateItemDiscount}
+                  removeItem={removeItem}
+                  containerClassName="flex-[6]"
+                />
+                <PaymentSummary
+                  subtotal={subtotal}
+                  total={total}
+                  totalDiscount={totalDiscount}
+                  containerClassName="flex-[4]"
+                />
+              </div>
+            </>
+          ) : currentView === 'GAS' ? (
+            <div className="flex-1 p-6 overflow-auto">
+              {/* เดี๋ยวเราจะสร้าง GasView มาวางตรงนี้ */}
+              <h2 className="text-2xl font-bold">ระบบจัดการแก๊ส</h2>
+              {/* ตัวอย่างปุ่มกดเพิ่มแก๊ส */}
+              <button 
+                onClick={() => addToCart({ id: 999, name: 'แก๊ส 15kg', price: '450', barcode: 'GAS-01', stock: 10 })}
+                className="mt-4 p-4 bg-primary text-white rounded-xl"
+              >
+                ทดสอบเพิ่มแก๊ส 15kg
+              </button>
+            </div>
+          ) : (
+            <div className="flex-1 p-6">
+              <h2 className="text-2xl font-bold">หน้า {currentView} กำลังพัฒนา...</h2>
+            </div>
+          )}
 
-          {/* Cart & Payment Section */}
-          <div className="flex-1 flex gap-6 p-6 overflow-hidden min-h-0">
-            {/* Cart Table */}
-            <CartTable 
-              cart={cart}
-              updateQuantity={updateQuantity}
-              updateDiscount={updateItemDiscount} // ต้องส่งฟังก์ชันนี้เข้าไป
-              removeItem={removeItem}
-              containerClassName="flex-[6] min-w-0"
-            />
-
-            {/* Payment Summary */}
-            <PaymentSummary
-              subtotal={subtotal}
-              total={total}
-              totalDiscount={totalDiscount}
-              containerClassName="flex-[4] min-w-0"
-            />
-          </div>
-
-          {/* Footer Actions */}
-          <FooterActions 
-            onClear={handleClearBill}
-            onPrint={handlePrint}
-            className="h-24 bg-surface-soft border-t border-soft px-6 py-4 flex items-center justify-between gap-4"
-          />
+          {/* Footer Actions ให้โชว์ทุกหน้า หรือเฉพาะหน้าขายก็ได้ */}
+          <FooterActions onClear={handleClearBill} onPrint={handlePrint} />
         </main>
       </div>
     </div>
