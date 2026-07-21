@@ -285,6 +285,18 @@ const saleChannelMeta: Record<SaleChannel, { icon: string; label: string; classN
 
 const paymentMethods: PaymentMethod[] = ['เงินสด', 'PromptPay'];
 const todayLabel = new Intl.DateTimeFormat('th-TH', { dateStyle: 'medium' }).format(new Date());
+const storageKeys = {
+  stockItems: 'tingkum.stockItems.v1',
+  gasItems: 'tingkum.gasItems.v1',
+  gasJobs: 'tingkum.gasJobs.v1',
+  gasJobSequence: 'tingkum.gasJobSequence.v1',
+  pendingGasReturns: 'tingkum.pendingGasReturns.v1',
+  lotteryTickets: 'tingkum.lotteryTickets.v1',
+  salesHistory: 'tingkum.salesHistory.v1',
+  staffMembers: 'tingkum.staffMembers.v1',
+  stockLog: 'tingkum.stockLog.v1',
+  stockLogSequence: 'tingkum.stockLogSequence.v1',
+} as const;
 
 function formatMoney(value: number) {
   return new Intl.NumberFormat('th-TH', {
@@ -292,6 +304,58 @@ function formatMoney(value: number) {
     currency: 'THB',
     maximumFractionDigits: 2,
   }).format(value);
+}
+
+function hasStoredValue(key: string) {
+  if (typeof window === 'undefined') {
+    return false;
+  }
+
+  return window.localStorage.getItem(key) !== null;
+}
+
+function readStoredValue<T>(key: string, fallback: T, revive?: (value: unknown) => T): T {
+  if (typeof window === 'undefined') {
+    return fallback;
+  }
+
+  try {
+    const rawValue = window.localStorage.getItem(key);
+    if (!rawValue) {
+      return fallback;
+    }
+
+    const parsedValue: unknown = JSON.parse(rawValue);
+    return revive ? revive(parsedValue) : parsedValue as T;
+  } catch {
+    return fallback;
+  }
+}
+
+function writeStoredValue<T>(key: string, value: T) {
+  if (typeof window === 'undefined') {
+    return;
+  }
+
+  try {
+    window.localStorage.setItem(key, JSON.stringify(value));
+  } catch {
+    // Storage can fail in private mode or when the quota is full. The app still works in memory.
+  }
+}
+
+function reviveSalesHistory(value: unknown): SaleRecord[] {
+  if (!Array.isArray(value)) {
+    return initialSalesHistory;
+  }
+
+  return value.map((sale) => {
+    const record = sale as SaleRecord;
+    return {
+      ...record,
+      createdAt: new Date(record.createdAt),
+    };
+  });
 }
 
 function formatReceiptDateTime(date: Date) {
@@ -462,8 +526,15 @@ function currentTimeLabel() {
   return new Intl.DateTimeFormat('th-TH', { hour: '2-digit', minute: '2-digit' }).format(new Date());
 }
 
+function dateInputValue(date: Date) {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+}
+
 function currentDateInput() {
-  return new Date().toISOString().slice(0, 10);
+  return dateInputValue(new Date());
 }
 
 function Icon({ name }: { name: string }) {
@@ -486,11 +557,15 @@ function EmptyState({ text }: { text: string }) {
 }
 
 export default function App() {
+  const [hasSavedStock] = useState(() => hasStoredValue(storageKeys.stockItems));
   const [currentView, setCurrentView] = useState<View>('POS');
   const [apiStatus, setApiStatus] = useState('ใช้ข้อมูลตัวอย่าง');
-  const [products, setProducts] = useState<Product[]>(sampleProducts);
-  const [stockItems, setStockItems] = useState<Product[]>(sampleProducts);
-  const [staffMembers, setStaffMembers] = useState<StaffMember[]>(initialStaff);
+  const [stockItems, setStockItems] = useState<Product[]>(() =>
+    readStoredValue(storageKeys.stockItems, sampleProducts),
+  );
+  const [staffMembers, setStaffMembers] = useState<StaffMember[]>(() =>
+    readStoredValue(storageKeys.staffMembers, initialStaff),
+  );
 
   const [posCart, setPosCart] = useState<CartItem[]>([]);
   const [barcodeInput, setBarcodeInput] = useState('');
@@ -513,15 +588,27 @@ export default function App() {
     unit: 'ชิ้น',
   });
 
+  const [gasItems, setGasItems] = useState<GasItem[]>(() =>
+    readStoredValue(storageKeys.gasItems, gasCatalog),
+  );
   const [gasQuantities, setGasQuantities] = useState<Record<string, number>>({});
   const [gasCustomer, setGasCustomer] = useState({ name: '', phone: '', address: '' });
   const [gasDriverId, setGasDriverId] = useState('S-003');
-  const [gasJobs, setGasJobs] = useState<GasJob[]>(initialGasJobs);
-  const [pendingGasReturns, setPendingGasReturns] = useState<PendingGasReturn[]>(initialPendingGasReturns);
-  const [gasJobSequence, setGasJobSequence] = useState(1002);
+  const [gasJobs, setGasJobs] = useState<GasJob[]>(() =>
+    readStoredValue(storageKeys.gasJobs, initialGasJobs),
+  );
+  const [pendingGasReturns, setPendingGasReturns] = useState<PendingGasReturn[]>(() =>
+    readStoredValue(storageKeys.pendingGasReturns, initialPendingGasReturns),
+  );
+  const [gasJobSequence, setGasJobSequence] = useState(() =>
+    readStoredValue(storageKeys.gasJobSequence, 1002),
+  );
   const [gasNotice, setGasNotice] = useState('เลือกถังแก๊สเพื่อเริ่มรายการ');
 
   const [lotteryInput, setLotteryInput] = useState('');
+  const [lotteryTickets, setLotteryTickets] = useState<LotteryTicket[]>(() =>
+    readStoredValue(storageKeys.lotteryTickets, lotteryStock),
+  );
   const [lotteryCart, setLotteryCart] = useState<CartItem[]>([]);
   const [lotteryPayment, setLotteryPayment] = useState<PaymentMethod>('เงินสด');
   const [lotteryReceived, setLotteryReceived] = useState(0);
@@ -530,33 +617,45 @@ export default function App() {
   const [correctionProductId, setCorrectionProductId] = useState(String(sampleProducts[0].id));
   const [correctionDelta, setCorrectionDelta] = useState('1');
   const [correctionReason, setCorrectionReason] = useState('');
-  const [stockLog, setStockLog] = useState<StockAdjustment[]>([
-    {
-      id: 'LOG-001',
-      productName: 'น้ำปลา 700ml',
-      delta: -1,
-      reason: 'สินค้าแตกตอนขนย้าย',
-      staffName: 'แม่ติ๋ง',
-      createdAt: 'วันนี้ 18:20',
-      date: currentDateInput(),
-    },
-  ]);
-  const [stockLogSequence, setStockLogSequence] = useState(2);
+  const [stockLog, setStockLog] = useState<StockAdjustment[]>(() =>
+    readStoredValue(storageKeys.stockLog, [
+      {
+        id: 'LOG-001',
+        productName: 'น้ำปลา 700ml',
+        delta: -1,
+        reason: 'สินค้าแตกตอนขนย้าย',
+        staffName: 'แม่ติ๋ง',
+        createdAt: 'วันนี้ 18:20',
+        date: currentDateInput(),
+      },
+    ]),
+  );
+  const [stockLogSequence, setStockLogSequence] = useState(() =>
+    readStoredValue(storageKeys.stockLogSequence, 2),
+  );
   const [selectedStockCategory, setSelectedStockCategory] = useState('ทั้งหมด');
   const [stockLogDateFilter, setStockLogDateFilter] = useState(currentDateInput());
 
   const [staffForm, setStaffForm] = useState({ name: '', phone: '', role: 'ขายหน้าร้าน' });
-  const [salesHistory, setSalesHistory] = useState<SaleRecord[]>(initialSalesHistory);
+  const [salesHistory, setSalesHistory] = useState<SaleRecord[]>(() =>
+    readStoredValue(storageKeys.salesHistory, initialSalesHistory, reviveSalesHistory),
+  );
   const [historyFilter, setHistoryFilter] = useState<SaleChannel | 'ALL'>('ALL');
   const [selectedSaleId, setSelectedSaleId] = useState(initialSalesHistory[0]?.id ?? '');
   const [historyNotice, setHistoryNotice] = useState('กดรายการเพื่อดูรายละเอียดทั้งหมด');
 
   useEffect(() => {
+    if (hasSavedStock) {
+      axios.get<ApiProduct[]>('http://localhost:5000/api/products')
+        .then(() => setApiStatus('ใช้ข้อมูลในเครื่อง | backend online'))
+        .catch(() => setApiStatus('ใช้ข้อมูลในเครื่อง'));
+      return;
+    }
+
     axios.get<ApiProduct[]>('http://localhost:5000/api/products')
       .then((response) => {
         const normalized = response.data.map(normalizeProduct);
         if (normalized.length > 0) {
-          setProducts(normalized);
           setStockItems(normalized);
           setApiStatus('เชื่อมต่อ tingkum_db แล้ว');
         }
@@ -564,13 +663,37 @@ export default function App() {
       .catch(() => {
         setApiStatus('ใช้ข้อมูลตัวอย่าง');
       });
-  }, []);
+  }, [hasSavedStock]);
+
+  useEffect(() => writeStoredValue(storageKeys.stockItems, stockItems), [stockItems]);
+  useEffect(() => writeStoredValue(storageKeys.staffMembers, staffMembers), [staffMembers]);
+  useEffect(() => writeStoredValue(storageKeys.gasItems, gasItems), [gasItems]);
+  useEffect(() => writeStoredValue(storageKeys.gasJobs, gasJobs), [gasJobs]);
+  useEffect(() => writeStoredValue(storageKeys.pendingGasReturns, pendingGasReturns), [pendingGasReturns]);
+  useEffect(() => writeStoredValue(storageKeys.gasJobSequence, gasJobSequence), [gasJobSequence]);
+  useEffect(() => writeStoredValue(storageKeys.lotteryTickets, lotteryTickets), [lotteryTickets]);
+  useEffect(() => writeStoredValue(storageKeys.salesHistory, salesHistory), [salesHistory]);
+  useEffect(() => writeStoredValue(storageKeys.stockLog, stockLog), [stockLog]);
+  useEffect(() => writeStoredValue(storageKeys.stockLogSequence, stockLogSequence), [stockLogSequence]);
 
   const activeStaff = useMemo(() => staffMembers.filter((staff) => staff.active), [staffMembers]);
   const deliveryStaff = useMemo(
     () => activeStaff.filter((staff) => staff.role.includes('ส่ง') || staff.role.includes('แก๊ส')),
     [activeStaff],
   );
+
+  useEffect(() => {
+    if (activeStaff.length > 0 && !activeStaff.some((staff) => staff.id === cashierId)) {
+      setCashierId(activeStaff[0].id);
+    }
+  }, [activeStaff, cashierId]);
+
+  useEffect(() => {
+    const availableDrivers = deliveryStaff.length > 0 ? deliveryStaff : activeStaff;
+    if (availableDrivers.length > 0 && !availableDrivers.some((staff) => staff.id === gasDriverId)) {
+      setGasDriverId(availableDrivers[0].id);
+    }
+  }, [activeStaff, deliveryStaff, gasDriverId]);
 
   const posSubtotal = useMemo(
     () => posCart.reduce((sum, item) => sum + item.price * item.quantity - item.discount, 0),
@@ -580,10 +703,10 @@ export default function App() {
   const posChange = posPayment === 'เงินสด' ? Math.max(0, cashReceived - posTotal) : 0;
 
   const gasOrderItems = useMemo(
-    () => gasCatalog
+    () => gasItems
       .map((item) => ({ ...item, quantity: gasQuantities[item.id] ?? 0 }))
       .filter((item) => item.quantity > 0),
-    [gasQuantities],
+    [gasItems, gasQuantities],
   );
   const gasTotal = gasOrderItems.reduce((sum, item) => sum + item.price * item.quantity, 0);
   const activeGasJobs = gasJobs.filter((job) => job.status === 'กำลังดำเนินการ');
@@ -604,9 +727,51 @@ export default function App() {
   const selectedCorrectionProductId = stockItems.some((item) => String(item.id) === correctionProductId)
     ? correctionProductId
     : String(stockItems[0]?.id ?? '');
-  const gasRevenue = gasJobs.reduce((sum, job) => sum + job.total, 0);
-  const possibleLotteryRevenue = lotteryStock.reduce((sum, ticket) => sum + ticket.remaining * ticket.price, 0);
-  const dailyEstimate = 4280 + gasRevenue + lotterySubtotal;
+  const todayKey = currentDateInput();
+  const todaySales = salesHistory.filter((sale) => dateInputValue(sale.createdAt) === todayKey);
+  const dailySalesTotal = todaySales.reduce((sum, sale) => sum + sale.total, 0);
+  const channelTotals = todaySales.reduce<Record<SaleChannel, number>>((totals, sale) => ({
+    ...totals,
+    [sale.channel]: totals[sale.channel] + sale.total,
+  }), { POS: 0, GAS: 0, LOTTERY: 0 });
+  const possibleLotteryRevenue = lotteryTickets.reduce((sum, ticket) => sum + ticket.remaining * ticket.price, 0);
+  const categorySales = useMemo(() => {
+    const totals = new Map<string, number>();
+
+    todaySales.forEach((sale) => {
+      sale.items.forEach((item) => {
+        const matchedProduct = stockItems.find((product) =>
+          product.barcode === item.barcode || product.name === item.name,
+        );
+        const category = sale.channel === 'POS'
+          ? matchedProduct?.category ?? 'สินค้าอื่น'
+          : saleChannelMeta[sale.channel].label;
+        const lineTotal = Math.max(0, item.price * item.quantity - item.discount);
+        totals.set(category, (totals.get(category) ?? 0) + lineTotal);
+      });
+    });
+
+    const maxValue = Math.max(1, ...totals.values());
+    return Array.from(totals.entries())
+      .map(([label, value]) => ({ label, value, percent: Math.round((value / maxValue) * 100) }))
+      .sort((a, b) => b.value - a.value)
+      .slice(0, 6);
+  }, [stockItems, todaySales]);
+  const staffPerformance = useMemo(() => {
+    const totals = new Map<string, { total: number; count: number }>();
+
+    todaySales.forEach((sale) => {
+      const current = totals.get(sale.staffName) ?? { total: 0, count: 0 };
+      totals.set(sale.staffName, {
+        total: current.total + sale.total,
+        count: current.count + 1,
+      });
+    });
+
+    return Array.from(totals.entries())
+      .map(([name, summary]) => ({ name, ...summary }))
+      .sort((a, b) => b.total - a.total);
+  }, [todaySales]);
   const filteredSalesHistory = useMemo(
     () => historyFilter === 'ALL'
       ? salesHistory
@@ -621,6 +786,13 @@ export default function App() {
   );
 
   function addProductToPos(product: Product) {
+    const currentProduct = stockItems.find((item) => item.id === product.id) ?? product;
+    const inCartQuantity = posCart.find((item) => item.id === String(product.id))?.quantity ?? 0;
+    if (currentProduct.stock <= inCartQuantity) {
+      setPosNotice(`${product.name} คงเหลือไม่พอ`);
+      return;
+    }
+
     setPosCart((previous) => {
       const existing = previous.find((item) => item.id === String(product.id));
       if (existing) {
@@ -651,7 +823,7 @@ export default function App() {
       return;
     }
 
-    const product = products.find(
+    const product = stockItems.find(
       (item) => item.barcode.toLowerCase() === query || item.name.toLowerCase().includes(query),
     );
 
@@ -674,7 +846,9 @@ export default function App() {
     addProductToPos(product);
     setBarcodeInput('');
     setUnknownBarcode('');
-    setPosNotice(`เพิ่ม ${product.name} แล้ว`);
+    if (product.stock > 0) {
+      setPosNotice(`เพิ่ม ${product.name} แล้ว`);
+    }
   }
 
   function cancelUnknownProduct() {
@@ -690,8 +864,13 @@ export default function App() {
     const stock = Number(newProductDraft.stock);
     const minStock = Number(newProductDraft.minStock);
 
-    if (!barcode || !name || !Number.isFinite(price) || price <= 0) {
-      setPosNotice('กรอกบาร์โค้ด ชื่อสินค้า และราคาขายให้ครบ');
+    if (!barcode || !name || !Number.isFinite(price) || price <= 0 || !Number.isFinite(stock) || stock <= 0) {
+      setPosNotice('กรอกบาร์โค้ด ชื่อสินค้า ราคาขาย และจำนวนเริ่มต้นให้ครบ');
+      return;
+    }
+
+    if (stockItems.some((item) => item.barcode === barcode)) {
+      setPosNotice(`บาร์โค้ด ${barcode} มีอยู่ใน Stock แล้ว`);
       return;
     }
 
@@ -706,7 +885,6 @@ export default function App() {
       unit: newProductDraft.unit.trim() || 'ชิ้น',
     };
 
-    setProducts((previous) => [...previous, product]);
     setStockItems((previous) => [...previous, product]);
     setCorrectionProductId(String(product.id));
     addProductToPos(product);
@@ -723,6 +901,15 @@ export default function App() {
   }
 
   function updateCartQuantity(id: string, delta: number) {
+    if (delta > 0) {
+      const cartItem = posCart.find((item) => item.id === id);
+      const stockItem = stockItems.find((item) => String(item.id) === id);
+      if (cartItem?.item_type === 'PRODUCT' && stockItem && cartItem.quantity >= stockItem.stock) {
+        setPosNotice(`${cartItem.name} คงเหลือ ${stockItem.stock} ${stockItem.unit}`);
+        return;
+      }
+    }
+
     setPosCart((previous) =>
       previous
         .map((item) => item.id === id ? { ...item, quantity: Math.max(1, item.quantity + delta) } : item)
@@ -749,6 +936,15 @@ export default function App() {
 
     if (posPayment === 'เงินสด' && cashReceived < posTotal) {
       setPosNotice(`รับเงินยังไม่พอ ขาด ${formatMoney(posTotal - cashReceived)}`);
+      return;
+    }
+
+    const insufficientItem = posCart.find((cartItem) => {
+      const stockItem = stockItems.find((item) => String(item.id) === cartItem.id);
+      return !stockItem || cartItem.quantity > stockItem.stock;
+    });
+    if (insufficientItem) {
+      setPosNotice(`${insufficientItem.name} คงเหลือไม่พอ กรุณาแก้จำนวนก่อนทำรายการ`);
       return;
     }
 
@@ -796,6 +992,12 @@ export default function App() {
       };
       setSalesHistory((previous) => [saleRecord, ...previous]);
       setSelectedSaleId(saleRecord.id);
+      setStockItems((previous) =>
+        previous.map((product) => {
+          const soldItem = receipt.items.find((item) => item.id === String(product.id));
+          return soldItem ? { ...product, stock: Math.max(0, product.stock - soldItem.quantity) } : product;
+        }),
+      );
       setPosNotice(`สร้างใบเสร็จ ${receipt.id}.pdf สำเร็จ โดย ${receipt.cashierName}`);
       setPosCart([]);
       setBillDiscount(0);
@@ -809,10 +1011,19 @@ export default function App() {
   }
 
   function updateGasQuantity(id: string, delta: number) {
+    const gasItem = gasItems.find((item) => item.id === id);
+    if (!gasItem) {
+      return;
+    }
+
     setGasQuantities((previous) => ({
       ...previous,
-      [id]: Math.max(0, (previous[id] ?? 0) + delta),
+      [id]: Math.max(0, Math.min(gasItem.stock, (previous[id] ?? 0) + delta)),
     }));
+
+    if (delta > 0 && (gasQuantities[id] ?? 0) >= gasItem.stock) {
+      setGasNotice(`${gasItem.name} คงเหลือ ${gasItem.stock} ถัง`);
+    }
   }
 
   function createGasJob() {
@@ -823,6 +1034,12 @@ export default function App() {
 
     if (!gasCustomer.name.trim() || !gasCustomer.phone.trim() || !gasCustomer.address.trim()) {
       setGasNotice('กรอกชื่อ เบอร์โทร และที่อยู่สำหรับส่งแก๊ส');
+      return;
+    }
+
+    const insufficientGasItem = gasOrderItems.find((orderItem) => orderItem.quantity > orderItem.stock);
+    if (insufficientGasItem) {
+      setGasNotice(`${insufficientGasItem.name} คงเหลือไม่พอ`);
       return;
     }
 
@@ -866,6 +1083,25 @@ export default function App() {
     setGasJobs((previous) => [newJob, ...previous]);
     setSalesHistory((previous) => [saleRecord, ...previous]);
     setSelectedSaleId(saleRecord.id);
+    setGasItems((previous) =>
+      previous.map((item) => {
+        const orderedItem = gasOrderItems.find((orderItem) => orderItem.id === item.id);
+        return orderedItem ? { ...item, stock: Math.max(0, item.stock - orderedItem.quantity) } : item;
+      }),
+    );
+    setPendingGasReturns((previous) => [
+      ...gasOrderItems
+        .filter((item) => item.operation === 'ซื้อ/ยืมถัง')
+        .map((item, index) => ({
+          id: `${jobId}-TANK-${index + 1}`,
+          customerName: newJob.customerName,
+          phone: newJob.phone,
+          tankName: item.name,
+          borrowedAt: createdAt,
+          quantity: item.quantity,
+        })),
+      ...previous,
+    ]);
     setGasJobSequence((previous) => previous + 1);
     setGasQuantities({});
     setGasCustomer({ name: '', phone: '', address: '' });
@@ -926,7 +1162,7 @@ export default function App() {
 
   function searchLottery() {
     const number = lotteryInput.trim();
-    const ticket = lotteryStock.find((item) => item.number === number);
+    const ticket = lotteryTickets.find((item) => item.number === number);
     if (!ticket) {
       setLotteryNotice(`ไม่พบเลข ${number || '-'}`);
       return;
@@ -940,7 +1176,7 @@ export default function App() {
   }
 
   function updateLotteryQuantity(id: string, delta: number) {
-    const ticket = lotteryStock.find((item) => item.number === id);
+    const ticket = lotteryTickets.find((item) => item.number === id);
     if (!ticket) {
       return;
     }
@@ -965,6 +1201,15 @@ export default function App() {
 
     if (lotteryPayment === 'เงินสด' && lotteryReceived < lotterySubtotal) {
       setLotteryNotice(`รับเงินยังไม่พอ ขาด ${formatMoney(lotterySubtotal - lotteryReceived)}`);
+      return;
+    }
+
+    const insufficientTicket = lotteryCart.find((cartItem) => {
+      const ticket = lotteryTickets.find((item) => item.number === cartItem.id);
+      return !ticket || cartItem.quantity > ticket.remaining;
+    });
+    if (insufficientTicket) {
+      setLotteryNotice(`${insufficientTicket.name} คงเหลือไม่พอ`);
       return;
     }
 
@@ -995,6 +1240,12 @@ export default function App() {
 
     setSalesHistory((previous) => [saleRecord, ...previous]);
     setSelectedSaleId(saleRecord.id);
+    setLotteryTickets((previous) =>
+      previous.map((ticket) => {
+        const soldItem = lotteryCart.find((item) => item.id === ticket.number);
+        return soldItem ? { ...ticket, remaining: Math.max(0, ticket.remaining - soldItem.quantity) } : ticket;
+      }),
+    );
     setLotteryNotice(`ขายหวยสำเร็จ ${formatMoney(lotterySubtotal)}`);
     setLotteryCart([]);
     setLotteryReceived(0);
@@ -1309,7 +1560,7 @@ export default function App() {
         <section className="panel">
           <PanelTitle icon="propane_tank" title="เลือกถังแก๊ส" detail={gasNotice} />
           <div className="gas-card-grid">
-            {gasCatalog.map((item) => (
+            {gasItems.map((item) => (
               <div className="gas-card" key={item.id}>
                 <img src={item.imageUrl} alt={item.name} />
                 <div>
@@ -1430,7 +1681,7 @@ export default function App() {
   }
 
   function renderLotteryPage() {
-    const matchingTicket = lotteryStock.find((ticket) => ticket.number === lotteryInput.trim());
+    const matchingTicket = lotteryTickets.find((ticket) => ticket.number === lotteryInput.trim());
 
     return (
       <div className="two-column-page">
@@ -1456,7 +1707,7 @@ export default function App() {
           )}
 
           <div className="lottery-grid">
-            {lotteryStock.map((ticket) => (
+            {lotteryTickets.map((ticket) => (
               <button
                 type="button"
                 key={`${ticket.number}-${ticket.series}`}
@@ -1693,8 +1944,8 @@ export default function App() {
         <div className="metric-grid">
           <div className="metric-card">
             <span>ยอดรวมวันนี้</span>
-            <strong>{formatMoney(dailyEstimate)}</strong>
-            <small>รวม POS ตัวอย่าง + Gas + Lottery ที่กำลังขาย</small>
+            <strong>{formatMoney(dailySalesTotal)}</strong>
+            <small>POS {formatMoney(channelTotals.POS)} | Gas {formatMoney(channelTotals.GAS)} | Lottery {formatMoney(channelTotals.LOTTERY)}</small>
           </div>
           <div className="metric-card success">
             <span>งานแก๊สเสร็จแล้ว</span>
@@ -1721,16 +1972,28 @@ export default function App() {
         <section className="panel">
           <PanelTitle icon="bar_chart" title="หมวดขายดีวันนี้" />
           <div className="bar-list">
-            {[
-              { label: 'ของแห้ง', value: 72 },
-              { label: 'เครื่องดื่ม', value: 58 },
-              { label: 'แก๊ส', value: 46 },
-              { label: 'หวย', value: 31 },
-            ].map((item) => (
+            {categorySales.length === 0 ? (
+              <EmptyState text="ยังไม่มีรายการขายวันนี้" />
+            ) : categorySales.map((item) => (
               <div key={item.label}>
                 <span>{item.label}</span>
-                <div><i style={{ width: `${item.value}%` }}></i></div>
-                <b>{item.value}%</b>
+                <div><i style={{ width: `${item.percent}%` }}></i></div>
+                <b>{formatMoney(item.value)}</b>
+              </div>
+            ))}
+          </div>
+        </section>
+
+        <section className="panel">
+          <PanelTitle icon="badge" title="ผลงานพนักงานวันนี้" />
+          <div className="staff-performance-list">
+            {staffPerformance.length === 0 ? (
+              <EmptyState text="ยังไม่มีรายการขายของพนักงานวันนี้" />
+            ) : staffPerformance.map((staff) => (
+              <div key={staff.name}>
+                <strong>{staff.name}</strong>
+                <span>{staff.count} รายการ</span>
+                <b>{formatMoney(staff.total)}</b>
               </div>
             ))}
           </div>

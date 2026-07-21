@@ -1171,6 +1171,31 @@ th:last-child {
   background: var(--color-primary);
 }
 
+.staff-performance-list {
+  display: grid;
+  gap: 0.5rem;
+}
+
+.staff-performance-list > div {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 86px auto;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.7rem;
+  border: 1px solid var(--color-border-surface);
+  border-radius: 8px;
+  background: var(--color-surface-soft);
+}
+
+.staff-performance-list span {
+  color: var(--color-muted);
+  font-size: 0.8rem;
+}
+
+.staff-performance-list b {
+  color: var(--color-primary-dark);
+}
+
 .stock-table table {
   min-width: 720px;
 }
@@ -1341,6 +1366,10 @@ th:last-child {
 
   .sale-row b {
     justify-self: start;
+  }
+
+  .staff-performance-list > div {
+    grid-template-columns: 1fr;
   }
 
   .new-product-grid,
