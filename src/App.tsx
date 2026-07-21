@@ -711,6 +711,8 @@ export default function App() {
   const gasTotal = gasOrderItems.reduce((sum, item) => sum + item.price * item.quantity, 0);
   const activeGasJobs = gasJobs.filter((job) => job.status === 'กำลังดำเนินการ');
   const completedGasJobs = gasJobs.filter((job) => job.status === 'เสร็จแล้ว');
+  const pendingGasReturnQuantity = pendingGasReturns.reduce((sum, item) => sum + item.quantity, 0);
+  const gasFollowUpCount = activeGasJobs.length + pendingGasReturns.length;
 
   const lotterySubtotal = lotteryCart.reduce((sum, item) => sum + item.price * item.quantity, 0);
   const lotteryChange = lotteryPayment === 'เงินสด' ? Math.max(0, lotteryReceived - lotterySubtotal) : 0;
@@ -1123,6 +1125,16 @@ export default function App() {
     if (returnItem) {
       setGasNotice(`รับคืนถัง ${returnItem.tankName} จาก ${returnItem.customerName} แล้ว`);
     }
+  }
+
+  function getPendingReturnQuantityForJob(job: GasJob) {
+    return pendingGasReturns
+      .filter((item) =>
+        item.id.startsWith(`${job.id}-`) ||
+        item.phone === job.phone ||
+        item.customerName === job.customerName,
+      )
+      .reduce((sum, item) => sum + item.quantity, 0);
   }
 
   function lotteryAvailable(ticket: LotteryTicket) {
@@ -1627,53 +1639,153 @@ export default function App() {
         </aside>
 
         <section className="panel wide-panel">
-          <PanelTitle icon="route" title="รายการที่ดำเนินอยู่" detail={`${activeGasJobs.length} งาน`} />
-          <div className="job-grid">
-            {activeGasJobs.length === 0 ? (
-              <EmptyState text="ไม่มีงานค้างส่ง" />
-            ) : activeGasJobs.map((job) => (
-              <div className="job-card" key={job.id}>
-                <div>
-                  <strong>{job.id} - {job.customerName}</strong>
-                  <p>{job.address}</p>
-                  <small>{job.createdAt} | คนส่ง {job.driver} | {formatMoney(job.total)}</small>
-                </div>
-                <button type="button" onClick={() => completeGasJob(job.id)}>ปิดงาน</button>
-              </div>
-            ))}
+          <PanelTitle
+            icon="pending_actions"
+            title="สถานะติดตามงานแก๊ส"
+            detail={`${activeGasJobs.length} งานยังไม่ปิด | ${pendingGasReturns.length} รายการยังไม่คืนถัง`}
+          />
+          <div className="gas-status-summary">
+            <div className="gas-status-card">
+              <span className="status-dot active"></span>
+              <small>งานยังไม่ปิด</small>
+              <strong>{activeGasJobs.length}</strong>
+            </div>
+            <div className="gas-status-card warning">
+              <span className="status-dot"></span>
+              <small>รายการยังไม่คืนถัง</small>
+              <strong>{pendingGasReturns.length}</strong>
+            </div>
+            <div className="gas-status-card">
+              <span className="status-dot"></span>
+              <small>จำนวนถังค้างคืน</small>
+              <strong>{pendingGasReturnQuantity}</strong>
+            </div>
+          </div>
+
+          <div className="gas-status-list">
+            {gasFollowUpCount === 0 ? (
+              <EmptyState text="ไม่มีงานแก๊สที่ต้องติดตาม" />
+            ) : (
+              <>
+                {activeGasJobs.map((job) => {
+                  const pendingReturnQuantity = getPendingReturnQuantityForJob(job);
+
+                  return (
+                    <div className="gas-status-row" key={`open-${job.id}`}>
+                      <span className="gas-status-icon"><Icon name="route" /></span>
+                      <div>
+                        <div className="gas-status-meta">
+                          <span className="badge warning">ยังไม่ปิดงาน</span>
+                          {pendingReturnQuantity > 0 && (
+                            <span className="badge warning">ค้างคืน {pendingReturnQuantity} ถัง</span>
+                          )}
+                        </div>
+                        <strong>{job.id} - {job.customerName}</strong>
+                        <p>{job.address}</p>
+                        <small>{job.createdAt} | คนส่ง {job.driver} | {formatMoney(job.total)}</small>
+                      </div>
+                      <button type="button" onClick={() => completeGasJob(job.id)}>ปิดงาน</button>
+                    </div>
+                  );
+                })}
+
+                {pendingGasReturns.map((item) => (
+                  <div className="gas-status-row" key={`return-${item.id}`}>
+                    <span className="gas-status-icon"><Icon name="assignment_return" /></span>
+                    <div>
+                      <div className="gas-status-meta">
+                        <span className="badge warning">ยังไม่คืนถัง</span>
+                      </div>
+                      <strong>{item.customerName} - {item.tankName} x {item.quantity}</strong>
+                      <p>{item.phone}</p>
+                      <small>ยืมเมื่อ {item.borrowedAt}</small>
+                    </div>
+                    <button type="button" onClick={() => completeGasReturn(item.id)}>รับคืนถัง</button>
+                  </div>
+                ))}
+              </>
+            )}
           </div>
         </section>
 
-        <section className="panel wide-panel">
-          <PanelTitle icon="assignment_return" title="รายการค้างถัง" detail={`${pendingGasReturns.length} รายการรอคืนถัง`} />
-          <div className="job-grid">
-            {pendingGasReturns.length === 0 ? (
-              <EmptyState text="ไม่มีรายการค้างถัง" />
-            ) : pendingGasReturns.map((item) => (
-              <div className="job-card" key={item.id}>
-                <div>
-                  <strong>{item.customerName} - {item.tankName} x {item.quantity}</strong>
-                  <p>{item.phone}</p>
-                  <small>ยืมเมื่อ {item.borrowedAt}</small>
+        <div className="wide-panel gas-followup-columns">
+          <section className="panel">
+            <PanelTitle icon="route" title="รายการที่ดำเนินอยู่" detail={`${activeGasJobs.length} งาน`} />
+            <div className="job-grid">
+              {activeGasJobs.length === 0 ? (
+                <EmptyState text="ไม่มีงานค้างส่ง" />
+              ) : activeGasJobs.map((job) => {
+                const pendingReturnQuantity = getPendingReturnQuantityForJob(job);
+
+                return (
+                  <div className="job-card" key={job.id}>
+                    <div>
+                      <div className="gas-status-meta">
+                        <span className="badge warning">ยังไม่ปิดงาน</span>
+                        {pendingReturnQuantity > 0 && (
+                          <span className="badge warning">ค้างคืน {pendingReturnQuantity} ถัง</span>
+                        )}
+                      </div>
+                      <strong>{job.id} - {job.customerName}</strong>
+                      <p>{job.address}</p>
+                      <small>{job.createdAt} | คนส่ง {job.driver} | {formatMoney(job.total)}</small>
+                    </div>
+                    <button type="button" onClick={() => completeGasJob(job.id)}>ปิดงาน</button>
+                  </div>
+                );
+              })}
+            </div>
+          </section>
+
+          <section className="panel">
+            <PanelTitle icon="assignment_return" title="รายการค้างถัง" detail={`${pendingGasReturns.length} รายการรอคืนถัง`} />
+            <div className="job-grid">
+              {pendingGasReturns.length === 0 ? (
+                <EmptyState text="ไม่มีรายการค้างถัง" />
+              ) : pendingGasReturns.map((item) => (
+                <div className="job-card" key={item.id}>
+                  <div>
+                    <div className="gas-status-meta">
+                      <span className="badge warning">ยังไม่คืนถัง</span>
+                    </div>
+                    <strong>{item.customerName} - {item.tankName} x {item.quantity}</strong>
+                    <p>{item.phone}</p>
+                    <small>ยืมเมื่อ {item.borrowedAt}</small>
+                  </div>
+                  <button type="button" onClick={() => completeGasReturn(item.id)}>รับคืนถัง</button>
                 </div>
-                <button type="button" onClick={() => completeGasReturn(item.id)}>รับคืนถัง</button>
-              </div>
-            ))}
-          </div>
-        </section>
+              ))}
+            </div>
+          </section>
+        </div>
 
         <section className="panel wide-panel">
           <PanelTitle icon="today" title="รายการทั้งหมดวันนี้" detail={`${gasJobs.length} รายการ`} />
-          <div className="history-list">
-            {gasJobs.map((job) => (
-              <div key={job.id}>
-                <span className={`status-dot ${job.status === 'เสร็จแล้ว' ? 'done' : 'active'}`}></span>
-                <strong>{job.createdAt}</strong>
-                <span>{job.customerName}</span>
-                <span>{job.items.map((item) => `${item.name} x${item.quantity}`).join(', ')}</span>
-                <b>{formatMoney(job.total)}</b>
-              </div>
-            ))}
+          <div className="history-list gas-history-list">
+            {gasJobs.map((job) => {
+              const isDone = job.status === 'เสร็จแล้ว';
+              const pendingReturnQuantity = getPendingReturnQuantityForJob(job);
+
+              return (
+                <div key={job.id}>
+                  <span className={`status-dot ${isDone ? 'done' : 'active'}`}></span>
+                  <strong>{job.createdAt}</strong>
+                  <span>{job.customerName}</span>
+                  <span>{job.items.map((item) => `${item.name} x${item.quantity}`).join(', ')}</span>
+                  <div className="gas-history-status">
+                    <span className={`badge ${isDone ? 'success' : 'warning'}`}>
+                      {isDone ? 'ปิดงานแล้ว' : 'ยังไม่ปิดงาน'}
+                    </span>
+                    {pendingReturnQuantity > 0 ? (
+                      <span className="badge warning">ค้างคืน {pendingReturnQuantity} ถัง</span>
+                    ) : (
+                      <span className="badge neutral">ไม่มีถังค้าง</span>
+                    )}
+                  </div>
+                  <b>{formatMoney(job.total)}</b>
+                </div>
+              );
+            })}
           </div>
         </section>
       </div>

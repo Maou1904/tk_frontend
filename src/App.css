@@ -296,7 +296,8 @@ textarea:focus {
 
 .input-with-button button,
 .stock-result button,
-.job-card button {
+.job-card button,
+.gas-status-row button {
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -844,6 +845,102 @@ th:last-child {
   grid-column: 1 / -1;
 }
 
+.gas-followup-columns {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 1rem;
+  align-items: start;
+}
+
+.gas-followup-columns .job-grid {
+  grid-template-columns: 1fr;
+}
+
+.gas-followup-columns .panel {
+  min-height: 100%;
+}
+
+.gas-status-summary {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.6rem;
+  margin-bottom: 0.75rem;
+}
+
+.gas-status-card {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 0.55rem;
+  padding: 0.75rem;
+  border: 1px solid var(--color-border-surface);
+  border-radius: 8px;
+  background: var(--color-surface-soft);
+}
+
+.gas-status-card small {
+  color: var(--color-muted);
+  font-weight: 700;
+}
+
+.gas-status-card strong {
+  color: var(--color-primary-dark);
+  font-size: 1.35rem;
+}
+
+.gas-status-card.warning strong {
+  color: var(--color-warning);
+}
+
+.gas-status-list {
+  display: grid;
+  gap: 0.6rem;
+}
+
+.gas-status-row {
+  display: grid;
+  grid-template-columns: 44px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.75rem;
+  border: 1px solid var(--color-border-surface);
+  border-radius: 8px;
+  background: var(--color-surface-soft);
+}
+
+.gas-status-icon {
+  display: inline-grid;
+  width: 40px;
+  height: 40px;
+  place-items: center;
+  border-radius: 8px;
+  background: var(--color-primary-soft);
+  color: var(--color-primary-dark);
+}
+
+.gas-status-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  margin-bottom: 0.35rem;
+}
+
+.gas-status-row p {
+  margin: 0.2rem 0;
+  color: var(--color-muted);
+  font-size: 0.84rem;
+}
+
+.gas-history-list > div {
+  grid-template-columns: 14px 70px 130px minmax(0, 1fr) minmax(170px, auto) auto;
+}
+
+.gas-history-status {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+}
+
 .job-grid {
   grid-template-columns: repeat(2, minmax(0, 1fr));
 }
@@ -1350,6 +1447,8 @@ th:last-child {
   .job-grid,
   .staff-grid,
   .gas-card-grid,
+  .gas-status-summary,
+  .gas-followup-columns,
   .history-summary-grid,
   .category-grid {
     grid-template-columns: 1fr;
@@ -1393,6 +1492,10 @@ th:last-child {
   .history-list > div b {
     grid-column: 3;
   }
+
+  .gas-history-list .gas-history-status {
+    grid-column: 3;
+  }
 }
 
 @media (max-width: 560px) {
@@ -1426,6 +1529,15 @@ th:last-child {
 
   .gas-card .stepper {
     grid-column: 1 / -1;
+    justify-self: start;
+  }
+
+  .gas-status-row {
+    grid-template-columns: 1fr;
+  }
+
+  .gas-status-icon,
+  .gas-status-row button {
     justify-self: start;
   }
 
