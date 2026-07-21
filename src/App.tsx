@@ -8,6 +8,7 @@ import CartTable from './components/CartTable';
 import PaymentSummary from './components/PaymentSummary';
 import FooterActions from './components/FooterActions';
 import axios from 'axios';
+import GasView from './GasView';
 
 // สร้าง Interface สำหรับ TypeScript (ช่วยให้เขียน Code ง่ายขึ้น)
 interface Product {
@@ -16,6 +17,7 @@ interface Product {
   price: string;
   stock: number;
   barcode: string;
+  item_type?: CartItem['item_type'];
 }
 
 function App() {
@@ -41,14 +43,14 @@ function App() {
         price: parseFloat(product.price),
         discount: 0,
         quantity: 2,
-        item_type: 'PRODUCT'
+        item_type: product.item_type ?? 'PRODUCT'
       }];
     });
   };
 
-  const [products, setProducts] = useState<Product[]>([]);
+  const [, setProducts] = useState<Product[]>([]);
 
-  const [discount, setDiscount] = useState<number>(0);
+  const [, setDiscount] = useState<number>(0);
 
   const updateQuantity = (id: string, delta: number) => {
     setCart(prev => prev.map(item =>
@@ -158,15 +160,8 @@ function App() {
             </>
           ) : currentView === 'GAS' ? (
             <div className="flex-1 p-6 overflow-auto">
-              {/* เดี๋ยวเราจะสร้าง GasView มาวางตรงนี้ */}
-              <h2 className="text-2xl font-bold">ระบบจัดการแก๊ส</h2>
-              {/* ตัวอย่างปุ่มกดเพิ่มแก๊ส */}
-              <button 
-                onClick={() => addToCart({ id: 999, name: 'แก๊ส 15kg', price: '450', barcode: 'GAS-01', stock: 10 })}
-                className="mt-4 p-4 bg-primary text-white rounded-xl"
-              >
-                ทดสอบเพิ่มแก๊ส 15kg
-              </button>
+              {/* ส่ง addToCart ลงไปเพื่อให้หน้า GasView กดเลือกแล้วของเข้าตะกร้าได้ */}
+              <GasView addToCart={addToCart} />
             </div>
           ) : (
             <div className="flex-1 p-6">
