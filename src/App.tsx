@@ -239,6 +239,11 @@ interface AuthSession {
 
 type LoginResponse = AuthSession;
 
+interface ChangePasswordResponse {
+  ok: boolean;
+  user: AuthUser;
+}
+
 interface Member {
   id: string;
   name: string;
@@ -920,15 +925,20 @@ function EmptyState({ text }: { text: string }) {
 export default function App() {
   const queryParams = typeof window === 'undefined' ? new URLSearchParams() : new URLSearchParams(window.location.search);
   const sessionFromUrl = queryParams.get('session') || '';
+  const pageScrollRef = useRef<HTMLElement | null>(null);
   const barcodeInputRef = useRef<HTMLInputElement>(null);
   const scannerVideoRef = useRef<HTMLVideoElement>(null);
   const scannerStreamRef = useRef<MediaStream | null>(null);
   const scannerFrameRef = useRef<number | null>(null);
   const handledPrintRequestIdsRef = useRef<Set<number>>(new Set());
   const previousGasSelectedCountRef = useRef(0);
+  const gasKeyboardScrollTopRef = useRef<number | null>(null);
   const [authSession, setAuthSession] = useState<AuthSession | null>(() => readAuthSession());
   const [loginForm, setLoginForm] = useState({ username: 'owner', password: '' });
   const [loginNotice, setLoginNotice] = useState('เข้าสู่ระบบก่อนใช้งาน');
+  const [passwordPanelOpen, setPasswordPanelOpen] = useState(false);
+  const [passwordForm, setPasswordForm] = useState({ currentPassword: '', newPassword: '', confirmPassword: '' });
+  const [passwordNotice, setPasswordNotice] = useState('เปลี่ยนรหัสผ่านของบัญชีที่กำลังใช้งาน');
   const [users, setUsers] = useState<AuthUser[]>([]);
   const [userForm, setUserForm] = useState({ username: '', displayName: '', password: '', role: 'user' as AppRole });
   const [scanSessionId, setScanSessionId] = useState(() => sessionFromUrl || createDailySessionId());
@@ -1103,30 +1113,54 @@ export default function App() {
 
   useEffect(() => {
     if (!authSession) {
-      return;
+      return undefined;
     }
 
-    if (sessionFromUrl) {
-      return;
-    }
+    let cancelled = false;
+    const targetSessionId = sessionFromUrl || createDailySessionId();
+    const syncAppSession = () => {
+      axios.get<AppSessionResponse>(`${API_BASE_URL}/api/app-sessions/${encodeURIComponent(targetSessionId)}`)
+        .then((response) => {
+          if (cancelled) {
+            return;
+          }
 
-    axios.get<AppSessionResponse>(`${API_BASE_URL}/api/app-sessions/today`)
-      .then((response) => {
-        setAppSession(response.data);
-        setScanSessionId(response.data.session_id);
-        if (response.data.status !== 'OPEN' && response.data.status !== 'ACTIVE') {
-          setCurrentView('CLOSING');
-        }
-        if (isOwner && response.data.previousClosedSession) {
-          void refreshClosingSummary(response.data.previousClosedSession.session_id)
-            .then((summary) => setPreviousClosingSummary(summary));
-        } else {
-          setPreviousClosingSummary(null);
-        }
-      })
-      .catch(() => {
-        // The client-side daily session id is deterministic, so POS can still work once the backend is available.
-      });
+          const nextSession = response.data;
+          const nextIsOpen = nextSession.status === 'OPEN' || nextSession.status === 'ACTIVE';
+          setAppSession(nextSession);
+          setScanSessionId(nextSession.session_id);
+          setCurrentView((view) => {
+            if (!nextIsOpen && view !== 'CLOSING') {
+              return 'CLOSING';
+            }
+            if (nextIsOpen && view === 'CLOSING' && !isOwner) {
+              return 'POS';
+            }
+            return view;
+          });
+          if (isOwner && nextSession.previousClosedSession) {
+            void refreshClosingSummary(nextSession.previousClosedSession.session_id)
+              .then((summary) => {
+                if (!cancelled) {
+                  setPreviousClosingSummary(summary);
+                }
+              });
+          } else {
+            setPreviousClosingSummary(null);
+          }
+        })
+        .catch(() => {
+          // The client-side daily session id is deterministic, so POS can still work once the backend is available.
+        });
+    };
+
+    syncAppSession();
+    const timer = window.setInterval(syncAppSession, 2500);
+
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
   }, [authSession, isOwner, refreshClosingSummary, sessionFromUrl]);
 
   useEffect(() => {
@@ -1248,6 +1282,83 @@ export default function App() {
 
     return () => mediaQuery.removeEventListener('change', syncViewport);
   }, []);
+
+  useEffect(() => {
+    if (!isMobileViewport || currentView !== 'GAS' || typeof window === 'undefined') {
+      return undefined;
+    }
+
+    const scrollContainer = pageScrollRef.current;
+    if (!scrollContainer) {
+      return undefined;
+    }
+
+    const editableSelector = 'input, textarea, select';
+    const visualViewport = window.visualViewport;
+    let lastViewportHeight = visualViewport?.height ?? window.innerHeight;
+    let restoreTimer: number | undefined;
+
+    const isGasEditable = (target: EventTarget | null) => (
+      target instanceof HTMLElement
+      && target.matches(editableSelector)
+      && Boolean(target.closest('.gas-sales-page'))
+    );
+
+    const restoreGasScroll = () => {
+      const activeElement = document.activeElement;
+      if (isGasEditable(activeElement)) {
+        return;
+      }
+
+      const previousScrollTop = gasKeyboardScrollTopRef.current;
+      if (previousScrollTop === null) {
+        return;
+      }
+
+      window.requestAnimationFrame(() => {
+        scrollContainer.scrollTo({ top: previousScrollTop, behavior: 'smooth' });
+        gasKeyboardScrollTopRef.current = null;
+      });
+    };
+
+    const scheduleRestore = (delay = 160) => {
+      if (restoreTimer !== undefined) {
+        window.clearTimeout(restoreTimer);
+      }
+      restoreTimer = window.setTimeout(restoreGasScroll, delay);
+    };
+
+    const handleFocusIn = (event: FocusEvent) => {
+      if (isGasEditable(event.target)) {
+        gasKeyboardScrollTopRef.current = scrollContainer.scrollTop;
+      }
+    };
+
+    const handleFocusOut = () => scheduleRestore(180);
+
+    const handleViewportChange = () => {
+      const nextViewportHeight = visualViewport?.height ?? window.innerHeight;
+      if (nextViewportHeight >= lastViewportHeight - 4) {
+        scheduleRestore(120);
+      }
+      lastViewportHeight = nextViewportHeight;
+    };
+
+    document.addEventListener('focusin', handleFocusIn);
+    document.addEventListener('focusout', handleFocusOut);
+    visualViewport?.addEventListener('resize', handleViewportChange);
+    visualViewport?.addEventListener('scroll', handleViewportChange);
+
+    return () => {
+      document.removeEventListener('focusin', handleFocusIn);
+      document.removeEventListener('focusout', handleFocusOut);
+      visualViewport?.removeEventListener('resize', handleViewportChange);
+      visualViewport?.removeEventListener('scroll', handleViewportChange);
+      if (restoreTimer !== undefined) {
+        window.clearTimeout(restoreTimer);
+      }
+    };
+  }, [currentView, isMobileViewport]);
 
   function applyGasState(state: GasStateResponse) {
     setGasItems(state.items.map(normalizeGasItem));
@@ -1660,6 +1771,42 @@ export default function App() {
     setSalesHistory([]);
     setCurrentMember(null);
     setCurrentView('POS');
+  }
+
+  async function changeCurrentPassword() {
+    const currentPassword = passwordForm.currentPassword;
+    const newPassword = passwordForm.newPassword;
+    const confirmPassword = passwordForm.confirmPassword;
+
+    if (!currentPassword || newPassword.length < 6) {
+      setPasswordNotice('กรอกรหัสเดิมและรหัสใหม่อย่างน้อย 6 ตัว');
+      return;
+    }
+    if (newPassword !== confirmPassword) {
+      setPasswordNotice('รหัสผ่านใหม่กับยืนยันรหัสไม่ตรงกัน');
+      return;
+    }
+
+    try {
+      const response = await axios.patch<ChangePasswordResponse>(`${API_BASE_URL}/api/auth/password`, {
+        currentPassword,
+        newPassword,
+      });
+      if (authSession) {
+        setAuthSession({
+          ...authSession,
+          user: normalizeAuthUser(response.data.user),
+        });
+      }
+      setPasswordForm({ currentPassword: '', newPassword: '', confirmPassword: '' });
+      setPasswordNotice('เปลี่ยนรหัสผ่านแล้ว');
+    } catch (error) {
+      if (axios.isAxiosError(error) && error.response?.status === 401) {
+        setPasswordNotice('รหัสเดิมไม่ถูกต้อง');
+        return;
+      }
+      setPasswordNotice('เปลี่ยนรหัสผ่านไม่สำเร็จ');
+    }
   }
 
   async function refreshUsers() {
@@ -3816,11 +3963,11 @@ export default function App() {
                 <strong>{gasReturnedCount} / {gasSelectedCount}</strong>
               </div>
               <div className="stepper large">
-                <button type="button" onClick={() => updateGasReturnedTankQuantity(-1)} disabled={!isOwner || gasReturnedCount <= 0}>
+                <button type="button" onClick={() => updateGasReturnedTankQuantity(-1)} disabled={gasReturnedCount <= 0}>
                   <Icon name="remove" />
                 </button>
                 <span>{gasReturnedCount}</span>
-                <button type="button" onClick={() => updateGasReturnedTankQuantity(1)} disabled={!isOwner || gasReturnedCount >= gasSelectedCount}>
+                <button type="button" onClick={() => updateGasReturnedTankQuantity(1)} disabled={gasReturnedCount >= gasSelectedCount}>
                   <Icon name="add" />
                 </button>
               </div>
@@ -5361,6 +5508,70 @@ export default function App() {
     );
   }
 
+  function renderPasswordPanel() {
+    if (!passwordPanelOpen) {
+      return null;
+    }
+
+    return (
+      <div className="modal-backdrop" role="presentation">
+        <section className="password-panel" role="dialog" aria-modal="true" aria-labelledby="password-panel-title">
+          <div className="modal-head">
+            <div>
+              <span className="badge neutral">Account</span>
+              <h2 id="password-panel-title">เปลี่ยนรหัสผ่าน</h2>
+              <p>{passwordNotice}</p>
+            </div>
+            <button
+              className="icon-button"
+              type="button"
+              title="ปิด"
+              onClick={() => {
+                setPasswordPanelOpen(false);
+                setPasswordForm({ currentPassword: '', newPassword: '', confirmPassword: '' });
+                setPasswordNotice('เปลี่ยนรหัสผ่านของบัญชีที่กำลังใช้งาน');
+              }}
+            >
+              <Icon name="close" />
+            </button>
+          </div>
+
+          <div className="form-stack">
+            <label className="field">
+              <span>รหัสผ่านเดิม</span>
+              <input
+                type="password"
+                value={passwordForm.currentPassword}
+                onChange={(event) => setPasswordForm({ ...passwordForm, currentPassword: event.target.value })}
+                autoFocus
+              />
+            </label>
+            <label className="field">
+              <span>รหัสผ่านใหม่</span>
+              <input
+                type="password"
+                value={passwordForm.newPassword}
+                onChange={(event) => setPasswordForm({ ...passwordForm, newPassword: event.target.value })}
+              />
+            </label>
+            <label className="field">
+              <span>ยืนยันรหัสผ่านใหม่</span>
+              <input
+                type="password"
+                value={passwordForm.confirmPassword}
+                onChange={(event) => setPasswordForm({ ...passwordForm, confirmPassword: event.target.value })}
+                onKeyDown={(event) => event.key === 'Enter' && void changeCurrentPassword()}
+              />
+            </label>
+            <button className="primary-action" type="button" onClick={() => void changeCurrentPassword()}>
+              <Icon name="lock_reset" /> บันทึกรหัสผ่าน
+            </button>
+          </div>
+        </section>
+      </div>
+    );
+  }
+
   function renderPage() {
     switch (currentView) {
       case 'POS':
@@ -5391,71 +5602,77 @@ export default function App() {
   }
 
   return (
-    <div className="app-shell">
-      <aside className="sidebar">
-        <div className="brand-block">
-          <strong>Tingkum</strong>
-          <span>Shop POS</span>
-        </div>
-
-        <nav className="nav-list" aria-label="Main navigation">
-          {allowedViews.map((view) => (
-            <button
-              type="button"
-              key={view}
-              className={`nav-item ${currentView === view ? 'selected' : ''}`}
-              onClick={() => setCurrentView(view)}
-            >
-              <Icon name={viewMeta[view].icon} />
-              <span>{viewMeta[view].title}</span>
-            </button>
-          ))}
-        </nav>
-
-        <div className="sidebar-status">
-          <span>Database</span>
-          <strong>tingkum_db</strong>
-          <small>{apiStatus}</small>
-          <span>Session</span>
-          <strong>{scanSessionId}</strong>
-        </div>
-      </aside>
-
-      <div className="main-shell">
-        <header className="topbar">
-          <div>
-            <h1>{viewMeta[currentView].title}</h1>
-            <p>{viewMeta[currentView].subtitle}</p>
+    <>
+      <div className="app-shell">
+        <aside className="sidebar">
+          <div className="brand-block">
+            <strong>Tingkum</strong>
+            <span>Shop POS</span>
           </div>
-          <div className="topbar-actions">
-            <span>{currentUser?.displayName} ({currentUser?.role})</span>
-            <span>{scanSessionId}</span>
-            <span className={`shop-status-chip ${shopStatus === 'CLOSED' ? 'closed' : isShopOpen ? 'open' : 'pending'}`}>
-              {closingStatusText()}
-            </span>
-            {isOwner && (
+
+          <nav className="nav-list" aria-label="Main navigation">
+            {allowedViews.map((view) => (
               <button
                 type="button"
-                className="topbar-close-button"
-                onClick={() => {
-                  setCurrentView('CLOSING');
-                  void refreshClosingSummary();
-                }}
+                key={view}
+                className={`nav-item ${currentView === view ? 'selected' : ''}`}
+                onClick={() => setCurrentView(view)}
               >
-                <Icon name={isShopOpen ? 'lock_clock' : 'storefront'} />
-                {isShopOpen ? 'ปิดร้าน' : shopStatus === 'CLOSED' ? 'Reopen' : 'เปิดร้าน'}
+                <Icon name={viewMeta[view].icon} />
+                <span>{viewMeta[view].title}</span>
               </button>
-            )}
-            <span>{todayLabel}</span>
-            <button type="button"><Icon name="notifications" /></button>
-            <button type="button" onClick={() => void logout()}><Icon name="logout" /></button>
-          </div>
-        </header>
+            ))}
+          </nav>
 
-        <main className="page-scroll">
-          {renderPage()}
-        </main>
+          <div className="sidebar-status">
+            <span>Database</span>
+            <strong>tingkum_db</strong>
+            <small>{apiStatus}</small>
+            <span>Session</span>
+            <strong>{scanSessionId}</strong>
+          </div>
+        </aside>
+
+        <div className="main-shell">
+          <header className="topbar">
+            <div>
+              <h1>{viewMeta[currentView].title}</h1>
+              <p>{viewMeta[currentView].subtitle}</p>
+            </div>
+            <div className="topbar-actions">
+              <span>{currentUser?.displayName} ({currentUser?.role})</span>
+              <span>{scanSessionId}</span>
+              <span className={`shop-status-chip ${shopStatus === 'CLOSED' ? 'closed' : isShopOpen ? 'open' : 'pending'}`}>
+                {closingStatusText()}
+              </span>
+              {isOwner && (
+                <button
+                  type="button"
+                  className="topbar-close-button"
+                  onClick={() => {
+                    setCurrentView('CLOSING');
+                    void refreshClosingSummary();
+                  }}
+                >
+                  <Icon name={isShopOpen ? 'lock_clock' : 'storefront'} />
+                  {isShopOpen ? 'ปิดร้าน' : shopStatus === 'CLOSED' ? 'Reopen' : 'เปิดร้าน'}
+                </button>
+              )}
+              <span>{todayLabel}</span>
+              <button type="button"><Icon name="notifications" /></button>
+              <button type="button" title="เปลี่ยนรหัสผ่าน" onClick={() => setPasswordPanelOpen(true)}>
+                <Icon name="lock_reset" />
+              </button>
+              <button type="button" title="ออกจากระบบ" onClick={() => void logout()}><Icon name="logout" /></button>
+            </div>
+          </header>
+
+          <main className="page-scroll" ref={pageScrollRef}>
+            {renderPage()}
+          </main>
+        </div>
       </div>
-    </div>
+      {renderPasswordPanel()}
+    </>
   );
 }
