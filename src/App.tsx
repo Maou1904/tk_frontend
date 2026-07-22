@@ -5,11 +5,12 @@ import { jsPDF } from 'jspdf';
 import type { CartItem } from './types';
 import './App.css';
 
-type View = 'POS' | 'GAS' | 'LOTTERY' | 'TOPUP' | 'HISTORY' | 'ANALYTICS' | 'STOCK' | 'STAFF';
+type View = 'POS' | 'GAS' | 'LOTTERY' | 'TOPUP' | 'HISTORY' | 'ANALYTICS' | 'STOCK' | 'STAFF' | 'CLOSING';
 type PaymentMethod = 'เงินสด' | 'PromptPay';
-type SaleChannel = 'POS' | 'GAS' | 'LOTTERY';
+type SaleChannel = 'POS' | 'GAS' | 'LOTTERY' | 'TOPUP';
 type AnalyticsPeriod = 'day' | 'month' | 'year';
 type MobileTopupProvider = 'AIS' | 'TRUE' | 'DTAC';
+type AppRole = 'owner' | 'user';
 
 interface ReceiptSnapshot {
   id: string;
@@ -26,6 +27,10 @@ interface ReceiptSnapshot {
 }
 
 interface SaleRecordItem {
+  id?: string;
+  productId?: string;
+  ticketId?: string;
+  number?: string;
   name: string;
   barcode?: string;
   quantity: number;
@@ -40,7 +45,7 @@ interface SaleRecord {
   customerName: string;
   staffName: string;
   paymentMethod: PaymentMethod;
-  status: 'สำเร็จ' | 'กำลังดำเนินการ' | 'เสร็จแล้ว';
+  status: string;
   items: SaleRecordItem[];
   subtotal: number;
   discount: number;
@@ -48,6 +53,8 @@ interface SaleRecord {
   cashReceived: number;
   change: number;
   note?: string;
+  cancelReason?: string;
+  cancelledAt?: Date;
 }
 
 type DetectedBarcode = {
@@ -91,6 +98,84 @@ interface CartSessionResponse {
 interface AppSessionResponse {
   session_id: string;
   business_date: string;
+  status: 'PENDING_OPEN' | 'OPEN' | 'CLOSED' | string;
+  openedAt?: string | null;
+  closedAt?: string | null;
+  previousClosedSession?: AppSessionResponse | null;
+}
+
+type ClosingSection = 'POS' | 'GAS' | 'LOTTERY' | 'TOPUP' | 'STOCK';
+
+interface ClosingCheck {
+  section: ClosingSection;
+  confirmed: boolean;
+  confirmedAt?: string | null;
+  confirmedBy?: string;
+  note?: string;
+}
+
+interface ClosingSummary {
+  session: AppSessionResponse;
+  previousClosedSession?: AppSessionResponse | null;
+  checks: ClosingCheck[];
+  readyToClose: boolean;
+  sections: {
+    pos: {
+      billCount: number;
+      itemCount: number;
+      subtotal: number;
+      discount: number;
+      total: number;
+      items: Array<{ name: string; barcode: string; quantity: number; total: number }>;
+    };
+    gas: {
+      jobCount: number;
+      soldQuantity: number;
+      returnedQuantity: number;
+      pendingReturnQuantity: number;
+      total: number;
+      deliveryFeeTotal: number;
+      items: Array<{ id: string; name: string; operation: string; quantity: number; total: number }>;
+      pendingReturns: Array<{ id: string; tankName: string; quantity: number }>;
+      tankBalance: Array<{
+        id: string;
+        name: string;
+        operation: string;
+        openingStock: number;
+        currentStock: number;
+        soldQuantity: number;
+        returnedQuantity: number;
+        adjustedQuantity: number;
+        pendingQuantity: number;
+        expectedMissing: number;
+        status: 'BALANCED' | 'PENDING_RETURN' | 'MISMATCH' | string;
+      }>;
+    };
+    lottery: {
+      billCount: number;
+      ticketCount: number;
+      total: number;
+      items: Array<{ number: string; quantity: number; total: number }>;
+    };
+    topup: {
+      orderCount: number;
+      total: number;
+      providers: Array<{
+        provider: MobileTopupProvider;
+        orderCount: number;
+        total: number;
+        paidTotal: number;
+        unpaidTotal: number;
+        toppedUpCount: number;
+        paidCount: number;
+      }>;
+    };
+    stock: {
+      movementCount: number;
+      movements: Array<{ itemType: string; itemName: string; netDelta: number; movementCount: number }>;
+      lowProducts: ApiProduct[];
+    };
+  };
 }
 
 interface ApiGasItem {
@@ -138,6 +223,22 @@ interface PosCheckoutResponse {
   cart: CartSessionResponse;
 }
 
+interface AuthUser {
+  id: number;
+  username: string;
+  displayName: string;
+  role: AppRole;
+  active: boolean;
+}
+
+interface AuthSession {
+  token: string;
+  expiresAt: string;
+  user: AuthUser;
+}
+
+type LoginResponse = AuthSession;
+
 interface Member {
   id: string;
   name: string;
@@ -174,15 +275,17 @@ interface GasJob {
   returnedTankQuantity?: number;
   emptyTankReturned?: boolean;
   paid?: boolean;
-  status: 'กำลังดำเนินการ' | 'เสร็จแล้ว';
+  status: string;
   createdAt: string;
 }
 
 interface LotteryTicket {
+  id: number;
   number: string;
   series: string;
   price: number;
   remaining: number;
+  active?: boolean;
 }
 
 interface MobileTopupOrder {
@@ -193,16 +296,22 @@ interface MobileTopupOrder {
   toppedUp: boolean;
   paid: boolean;
   createdAt: Date;
+  status?: string;
+  cancelReason?: string;
 }
 
 interface StockAdjustment {
   id: string;
   productName: string;
+  itemType?: string;
+  itemId?: string;
   delta: number;
   reason: string;
   staffName: string;
-  createdAt: string;
+  createdAt: string | Date;
   date: string;
+  sourceType?: string;
+  sourceId?: string;
 }
 
 interface NewProductDraft {
@@ -225,84 +334,6 @@ interface PendingGasReturn {
   quantity: number;
 }
 
-const sampleMembers: Member[] = [
-  { id: 'M-001', name: 'ป้าสมใจ', phone: '0812345678', note: 'ซื้อประจำ ซอย 3' },
-  { id: 'M-002', name: 'ลุงวิชัย', phone: '0891112222', note: 'มักซื้อแก๊สและน้ำดื่ม' },
-  { id: 'M-003', name: 'คุณนิด', phone: '0865551212', note: 'ลูกค้าประจำหน้าร้าน' },
-];
-
-const initialStaff: StaffMember[] = [
-  { id: 'S-001', name: 'แม่ติ๋ง', phone: '0810001111', role: 'เจ้าของร้าน', active: true },
-  { id: 'S-002', name: 'ตั้ม', phone: '0820002222', role: 'ขายหน้าร้าน', active: true },
-  { id: 'S-003', name: 'บอล', phone: '0830003333', role: 'ส่งแก๊ส', active: true },
-  { id: 'S-004', name: 'มายด์', phone: '0840004444', role: 'พนักงานพาร์ทไทม์', active: false },
-];
-
-const lotteryStock: LotteryTicket[] = [
-  { number: '123456', series: 'ชุด 01', price: 100, remaining: 2 },
-  { number: '654321', series: 'ชุด 01', price: 100, remaining: 1 },
-  { number: '889900', series: 'ชุด 02', price: 100, remaining: 5 },
-  { number: '112233', series: 'ชุด 02', price: 100, remaining: 0 },
-  { number: '456789', series: 'ชุด 03', price: 100, remaining: 3 },
-];
-
-const initialSalesHistory: SaleRecord[] = [
-  {
-    id: 'POS-20260721-091500',
-    channel: 'POS',
-    createdAt: new Date('2026-07-21T09:15:00'),
-    customerName: 'ป้าสมใจ',
-    staffName: 'แม่ติ๋ง',
-    paymentMethod: 'เงินสด',
-    status: 'สำเร็จ',
-    items: [
-      { name: 'น้ำดื่ม 600ml', barcode: '8850001', quantity: 6, price: 7, discount: 0 },
-      { name: 'มาม่าหมูสับ', barcode: '8850003', quantity: 3, price: 8, discount: 0 },
-    ],
-    subtotal: 66,
-    discount: 0,
-    total: 66,
-    cashReceived: 100,
-    change: 34,
-    note: 'ขายหน้าร้าน',
-  },
-  {
-    id: 'GAS-1000',
-    channel: 'GAS',
-    createdAt: new Date('2026-07-21T08:35:00'),
-    customerName: 'ลุงวิชัย',
-    staffName: 'บอล',
-    paymentMethod: 'เงินสด',
-    status: 'เสร็จแล้ว',
-    items: [{ name: 'ปตท. 4 กก. เติมแก๊ส', quantity: 2, price: 200, discount: 0 }],
-    subtotal: 400,
-    discount: 0,
-    total: 400,
-    cashReceived: 400,
-    change: 0,
-    note: 'ร้านซ่อมรถหน้าปากซอย',
-  },
-  {
-    id: 'LOT-20260721-103000',
-    channel: 'LOTTERY',
-    createdAt: new Date('2026-07-21T10:30:00'),
-    customerName: 'ลูกค้าทั่วไป',
-    staffName: 'ตั้ม',
-    paymentMethod: 'เงินสด',
-    status: 'สำเร็จ',
-    items: [
-      { name: 'หวยเลข 123456', barcode: 'ชุด 01', quantity: 1, price: 100, discount: 0 },
-      { name: 'หวยเลข 889900', barcode: 'ชุด 02', quantity: 1, price: 100, discount: 0 },
-    ],
-    subtotal: 200,
-    discount: 0,
-    total: 200,
-    cashReceived: 200,
-    change: 0,
-    note: 'ขายหวยหน้าร้าน',
-  },
-];
-
 const viewMeta: Record<View, { icon: string; title: string; subtitle: string }> = {
   POS: { icon: 'point_of_sale', title: 'POS', subtitle: 'ขายหน้าร้าน แสกนสินค้า สมาชิก ชำระเงิน' },
   GAS: { icon: 'propane_tank', title: 'Gas', subtitle: 'ขายแก๊สและติดตามงานส่ง แยกเงินจาก POS' },
@@ -312,29 +343,35 @@ const viewMeta: Record<View, { icon: string; title: string; subtitle: string }> 
   ANALYTICS: { icon: 'monitoring', title: 'Analytics', subtitle: 'ภาพรวมยอดขาย สต็อก และพนักงาน' },
   STOCK: { icon: 'inventory_2', title: 'Stock', subtitle: 'จัดการสินค้าและบันทึกการปรับสต็อก' },
   STAFF: { icon: 'badge', title: 'Staff', subtitle: 'ข้อมูลพนักงานในร้าน' },
+  CLOSING: { icon: 'lock_clock', title: 'Close Shop', subtitle: 'ตรวจยอดประจำวัน ยืนยันแต่ละหมวด และปิดรอบขาย' },
 };
 
 const saleChannelMeta: Record<SaleChannel, { icon: string; label: string; className: string }> = {
   POS: { icon: 'point_of_sale', label: 'POS', className: 'pos' },
   GAS: { icon: 'propane_tank', label: 'แก๊ส', className: 'gas' },
   LOTTERY: { icon: 'confirmation_number', label: 'หวย', className: 'lottery' },
+  TOPUP: { icon: 'phone_iphone', label: 'Topup', className: 'topup' },
 };
 
+const saleChannels: SaleChannel[] = ['POS', 'GAS', 'LOTTERY', 'TOPUP'];
 const paymentMethods: PaymentMethod[] = ['เงินสด', 'PromptPay'];
 const topupProviders: MobileTopupProvider[] = ['AIS', 'TRUE', 'DTAC'];
 const topupQuickAmounts = [20, 50, 100, 150, 200, 300, 500, 1000];
 const topupKeypad = ['1', '2', '3', '4', '5', '6', '7', '8', '9', '0'];
+const closingSectionMeta: Record<ClosingSection, { icon: string; label: string }> = {
+  POS: { icon: 'point_of_sale', label: 'สินค้า POS' },
+  GAS: { icon: 'propane_tank', label: 'แก๊ส' },
+  LOTTERY: { icon: 'confirmation_number', label: 'หวย' },
+  TOPUP: { icon: 'phone_iphone', label: 'เติมเงิน' },
+  STOCK: { icon: 'inventory_2', label: 'สต็อกประจำวัน' },
+};
+const closingSections: ClosingSection[] = ['POS', 'GAS', 'LOTTERY', 'TOPUP', 'STOCK'];
 const todayLabel = new Intl.DateTimeFormat('th-TH', { dateStyle: 'medium' }).format(new Date());
 const storageKeys = {
   appSessionId: 'tingkum.appSessionId.v1',
   deviceId: 'tingkum.deviceId.v1',
-  lotteryTickets: 'tingkum.lotteryTickets.v1',
-  mobileTopups: 'tingkum.mobileTopups.v1',
-  salesHistory: 'tingkum.salesHistory.v1',
-  staffMembers: 'tingkum.staffMembers.v1',
-  stockLog: 'tingkum.stockLog.v1',
-  stockLogSequence: 'tingkum.stockLogSequence.v1',
 } as const;
+const authSessionKey = 'tingkum.authSession.v1';
 
 function getApiBaseUrl() {
   const configuredApiBaseUrl = import.meta.env.VITE_API_BASE_URL;
@@ -377,6 +414,14 @@ function formatMoney(value: number) {
   }).format(value);
 }
 
+function isCompletedStatus(status: string) {
+  return ['completed', 'done', 'success', 'สำเร็จ', 'เสร็จแล้ว'].includes(status.toLowerCase());
+}
+
+function isCancelledStatus(status: string) {
+  return status.toLowerCase() === 'cancelled' || status === 'ยกเลิก';
+}
+
 function readStoredValue<T>(key: string, fallback: T, revive?: (value: unknown) => T): T {
   if (typeof window === 'undefined') {
     return fallback;
@@ -407,41 +452,58 @@ function writeStoredValue<T>(key: string, value: T) {
   }
 }
 
-function reviveSalesHistory(value: unknown): SaleRecord[] {
-  if (!Array.isArray(value)) {
-    return initialSalesHistory;
+function readAuthSession(): AuthSession | null {
+  if (typeof window === 'undefined') {
+    return null;
   }
 
-  return value.map((sale) => {
-    const record = sale as SaleRecord;
-    return {
-      ...record,
-      createdAt: new Date(record.createdAt),
-    };
-  });
+  try {
+    const rawValue = window.sessionStorage.getItem(authSessionKey);
+    if (!rawValue) {
+      return null;
+    }
+
+    const parsed = JSON.parse(rawValue) as AuthSession;
+    if (!parsed?.token || !parsed?.user || new Date(parsed.expiresAt).getTime() <= Date.now()) {
+      window.sessionStorage.removeItem(authSessionKey);
+      return null;
+    }
+
+    return parsed;
+  } catch {
+    window.sessionStorage.removeItem(authSessionKey);
+    return null;
+  }
 }
 
-function reviveMobileTopups(value: unknown): MobileTopupOrder[] {
-  if (!Array.isArray(value)) {
-    return [];
+function writeAuthSession(session: AuthSession | null) {
+  if (typeof window === 'undefined') {
+    return;
   }
 
-  return value.map((order) => {
-    const record = order as MobileTopupOrder;
-    return {
-      ...record,
-      amount: Number(record.amount),
-      toppedUp: Boolean(record.toppedUp),
-      paid: Boolean(record.paid),
-      createdAt: new Date(record.createdAt),
-    };
-  });
+  if (!session) {
+    window.sessionStorage.removeItem(authSessionKey);
+    return;
+  }
+
+  window.sessionStorage.setItem(authSessionKey, JSON.stringify(session));
+}
+
+function normalizeAuthUser(user: AuthUser): AuthUser {
+  return {
+    id: Number(user.id),
+    username: user.username,
+    displayName: user.displayName,
+    role: user.role === 'owner' ? 'owner' : 'user',
+    active: Boolean(user.active),
+  };
 }
 
 function normalizeSaleRecord(record: ApiSaleRecord | SaleRecord): SaleRecord {
   return {
     ...record,
     createdAt: new Date(record.createdAt),
+    cancelledAt: record.cancelledAt ? new Date(record.cancelledAt) : undefined,
     subtotal: Number(record.subtotal),
     discount: Number(record.discount),
     total: Number(record.total),
@@ -449,10 +511,45 @@ function normalizeSaleRecord(record: ApiSaleRecord | SaleRecord): SaleRecord {
     change: Number(record.change),
     items: record.items.map((item) => ({
       ...item,
+      id: item.id === undefined ? undefined : String(item.id),
+      productId: item.productId === undefined ? undefined : String(item.productId),
+      ticketId: item.ticketId === undefined ? undefined : String(item.ticketId),
       quantity: Number(item.quantity),
       price: Number(item.price),
       discount: Number(item.discount ?? 0),
     })),
+  };
+}
+
+function normalizeLotteryTicket(ticket: LotteryTicket): LotteryTicket {
+  return {
+    id: Number(ticket.id),
+    number: ticket.number,
+    series: ticket.series || 'Manual',
+    price: Number(ticket.price),
+    remaining: Number(ticket.remaining),
+    active: ticket.active ?? true,
+  };
+}
+
+function normalizeTopupOrder(order: MobileTopupOrder): MobileTopupOrder {
+  return {
+    ...order,
+    amount: Number(order.amount),
+    toppedUp: Boolean(order.toppedUp),
+    paid: Boolean(order.paid),
+    createdAt: new Date(order.createdAt),
+  };
+}
+
+function normalizeStockMovement(log: StockAdjustment): StockAdjustment {
+  const createdAt = new Date(log.createdAt);
+  return {
+    ...log,
+    id: String(log.id),
+    delta: Number(log.delta),
+    createdAt,
+    date: log.date || dateInputValue(createdAt),
   };
 }
 
@@ -484,16 +581,6 @@ function createSaleId(prefix: SaleChannel, date: Date) {
   const minute = String(date.getMinutes()).padStart(2, '0');
   const second = String(date.getSeconds()).padStart(2, '0');
   return `${prefix}-${year}${month}${day}-${hour}${minute}${second}`;
-}
-
-function createTopupId(date: Date) {
-  const year = date.getFullYear();
-  const month = String(date.getMonth() + 1).padStart(2, '0');
-  const day = String(date.getDate()).padStart(2, '0');
-  const hour = String(date.getHours()).padStart(2, '0');
-  const minute = String(date.getMinutes()).padStart(2, '0');
-  const second = String(date.getSeconds()).padStart(2, '0');
-  return `TOPUP-${year}${month}${day}-${hour}${minute}${second}`;
 }
 
 function escapeHtml(value: string) {
@@ -743,10 +830,6 @@ function normalizeCartItem(item: CartItem): CartItem {
   };
 }
 
-function currentTimeLabel() {
-  return new Intl.DateTimeFormat('th-TH', { hour: '2-digit', minute: '2-digit' }).format(new Date());
-}
-
 function dateInputValue(date: Date) {
   const year = date.getFullYear();
   const month = String(date.getMonth() + 1).padStart(2, '0');
@@ -843,6 +926,11 @@ export default function App() {
   const scannerFrameRef = useRef<number | null>(null);
   const handledPrintRequestIdsRef = useRef<Set<number>>(new Set());
   const previousGasSelectedCountRef = useRef(0);
+  const [authSession, setAuthSession] = useState<AuthSession | null>(() => readAuthSession());
+  const [loginForm, setLoginForm] = useState({ username: 'owner', password: '' });
+  const [loginNotice, setLoginNotice] = useState('เข้าสู่ระบบก่อนใช้งาน');
+  const [users, setUsers] = useState<AuthUser[]>([]);
+  const [userForm, setUserForm] = useState({ username: '', displayName: '', password: '', role: 'user' as AppRole });
   const [scanSessionId, setScanSessionId] = useState(() => sessionFromUrl || createDailySessionId());
   const [deviceId] = useState(() => readStoredValue(storageKeys.deviceId, createDeviceId()));
   const [isMobileViewport, setIsMobileViewport] = useState(() =>
@@ -855,16 +943,19 @@ export default function App() {
   const [cameraActive, setCameraActive] = useState(false);
   const [currentView, setCurrentView] = useState<View>('POS');
   const [apiStatus, setApiStatus] = useState('กำลังโหลดสินค้าใน tingkum_db');
+  const [appSession, setAppSession] = useState<AppSessionResponse | null>(null);
+  const [closingSummary, setClosingSummary] = useState<ClosingSummary | null>(null);
+  const [previousClosingSummary, setPreviousClosingSummary] = useState<ClosingSummary | null>(null);
+  const [closingNotice, setClosingNotice] = useState('โหลดสถานะร้านจาก tingkum_db');
+  const [isClosingLoading, setIsClosingLoading] = useState(false);
   const [stockItems, setStockItems] = useState<Product[]>([]);
-  const [staffMembers, setStaffMembers] = useState<StaffMember[]>(() =>
-    readStoredValue(storageKeys.staffMembers, initialStaff),
-  );
+  const [staffMembers, setStaffMembers] = useState<StaffMember[]>([]);
 
   const [posCart, setPosCart] = useState<CartItem[]>([]);
   const [barcodeInput, setBarcodeInput] = useState('');
   const [memberPhone, setMemberPhone] = useState('');
   const [currentMember, setCurrentMember] = useState<Member | null>(null);
-  const [cashierId, setCashierId] = useState(initialStaff[0].id);
+  const [cashierId, setCashierId] = useState('');
   const [posPayment, setPosPayment] = useState<PaymentMethod>('เงินสด');
   const [cashReceived, setCashReceived] = useState(0);
   const [billDiscount, setBillDiscount] = useState(0);
@@ -880,11 +971,20 @@ export default function App() {
     minStock: '5',
     unit: 'ชิ้น',
   });
+  const [stockProductDraft, setStockProductDraft] = useState<NewProductDraft>({
+    barcode: '',
+    name: '',
+    price: '',
+    stock: '1',
+    category: 'ทั่วไป',
+    minStock: '5',
+    unit: 'ชิ้น',
+  });
 
   const [gasItems, setGasItems] = useState<GasItem[]>([]);
   const [gasQuantities, setGasQuantities] = useState<Record<string, number>>({});
   const [gasCustomer, setGasCustomer] = useState({ name: '', phone: '', address: '' });
-  const [gasDriverId, setGasDriverId] = useState('S-003');
+  const [gasDriverId, setGasDriverId] = useState('');
   const [gasJobs, setGasJobs] = useState<GasJob[]>([]);
   const [pendingGasReturns, setPendingGasReturns] = useState<PendingGasReturn[]>([]);
   const [gasNotice, setGasNotice] = useState('กำลังโหลดข้อมูลแก๊สจาก tingkum_db');
@@ -892,11 +992,20 @@ export default function App() {
   const [gasPaid, setGasPaid] = useState(true);
   const [gasDeliveryFee, setGasDeliveryFee] = useState(20);
   const [gasPendingReturnQuantities, setGasPendingReturnQuantities] = useState<Record<string, number>>({});
+  const [gasItemDraft, setGasItemDraft] = useState({
+    id: '',
+    name: '',
+    operation: 'ขายแก๊ส',
+    price: '',
+    stock: '1',
+    imageUrl: '',
+  });
+  const [gasCorrectionItemId, setGasCorrectionItemId] = useState('');
+  const [gasCorrectionDelta, setGasCorrectionDelta] = useState('1');
+  const [gasCorrectionReason, setGasCorrectionReason] = useState('');
 
   const [lotteryInput, setLotteryInput] = useState('');
-  const [lotteryTickets, setLotteryTickets] = useState<LotteryTicket[]>(() =>
-    readStoredValue(storageKeys.lotteryTickets, lotteryStock),
-  );
+  const [lotteryTickets, setLotteryTickets] = useState<LotteryTicket[]>([]);
   const [lotteryCart, setLotteryCart] = useState<CartItem[]>([]);
   const [lotteryPayment, setLotteryPayment] = useState<PaymentMethod>('เงินสด');
   const [lotteryReceived, setLotteryReceived] = useState(0);
@@ -906,39 +1015,20 @@ export default function App() {
   const [topupProvider, setTopupProvider] = useState<MobileTopupProvider>('AIS');
   const [topupPhone, setTopupPhone] = useState('');
   const [topupAmount, setTopupAmount] = useState('100');
-  const [topupOrders, setTopupOrders] = useState<MobileTopupOrder[]>(() =>
-    readStoredValue(storageKeys.mobileTopups, [], reviveMobileTopups),
-  );
+  const [topupOrders, setTopupOrders] = useState<MobileTopupOrder[]>([]);
   const [topupNotice, setTopupNotice] = useState('เลือกค่าย กรอกเบอร์ และจำนวนเงินก่อนยืนยันรายการ');
 
   const [correctionProductId, setCorrectionProductId] = useState('');
   const [correctionDelta, setCorrectionDelta] = useState('1');
   const [correctionReason, setCorrectionReason] = useState('');
-  const [stockLog, setStockLog] = useState<StockAdjustment[]>(() =>
-    readStoredValue(storageKeys.stockLog, [
-      {
-        id: 'LOG-001',
-        productName: 'น้ำปลา 700ml',
-        delta: -1,
-        reason: 'สินค้าแตกตอนขนย้าย',
-        staffName: 'แม่ติ๋ง',
-        createdAt: 'วันนี้ 18:20',
-        date: currentDateInput(),
-      },
-    ]),
-  );
-  const [stockLogSequence, setStockLogSequence] = useState(() =>
-    readStoredValue(storageKeys.stockLogSequence, 2),
-  );
+  const [stockLog, setStockLog] = useState<StockAdjustment[]>([]);
   const [selectedStockCategory, setSelectedStockCategory] = useState('ทั้งหมด');
   const [stockLogDateFilter, setStockLogDateFilter] = useState(currentDateInput());
 
   const [staffForm, setStaffForm] = useState({ name: '', phone: '', role: 'ขายหน้าร้าน' });
-  const [salesHistory, setSalesHistory] = useState<SaleRecord[]>(() =>
-    readStoredValue(storageKeys.salesHistory, initialSalesHistory, reviveSalesHistory),
-  );
+  const [salesHistory, setSalesHistory] = useState<SaleRecord[]>([]);
   const [historyFilter, setHistoryFilter] = useState<SaleChannel | 'ALL'>('ALL');
-  const [selectedSaleId, setSelectedSaleId] = useState(initialSalesHistory[0]?.id ?? '');
+  const [selectedSaleId, setSelectedSaleId] = useState('');
   const [historyNotice, setHistoryNotice] = useState('กดรายการเพื่อดูรายละเอียดทั้งหมด');
   const [analyticsPeriod, setAnalyticsPeriod] = useState<AnalyticsPeriod>('day');
   const [analyticsDate, setAnalyticsDate] = useState(currentDateInput());
@@ -946,24 +1036,104 @@ export default function App() {
   const [analyticsYear, setAnalyticsYear] = useState(currentYearInput());
   const [analyticsSales, setAnalyticsSales] = useState<SaleRecord[]>([]);
   const [analyticsRange, setAnalyticsRange] = useState({ startDate: currentDateInput(), endDate: '' });
-  const [analyticsNotice, setAnalyticsNotice] = useState('เลือกช่วงเวลาเพื่อดู Dashboard จาก sales_records');
+  const [analyticsNotice, setAnalyticsNotice] = useState('เลือกช่วงเวลาเพื่อดู Dashboard จากฐานข้อมูล');
   const [isAnalyticsLoading, setIsAnalyticsLoading] = useState(false);
+  const currentUser = authSession?.user ?? null;
+  const isOwner = currentUser?.role === 'owner';
+  const shopStatus = appSession?.status ?? 'PENDING_OPEN';
+  const isShopOpen = shopStatus === 'OPEN' || shopStatus === 'ACTIVE';
+  const allowedViews = useMemo(
+    () => (Object.keys(viewMeta) as View[])
+      .filter((view) => view !== 'CLOSING')
+      .filter((view) => isOwner || (view !== 'STOCK' && view !== 'STAFF')),
+    [isOwner],
+  );
+  const refreshClosingSummary = useCallback(async (targetSessionId = scanSessionId) => {
+    if (!isOwner) {
+      return null;
+    }
+
+    const isCurrentSession = targetSessionId === scanSessionId;
+    if (isCurrentSession) {
+      setIsClosingLoading(true);
+    }
+    try {
+      const response = await axios.get<ClosingSummary>(
+        `${API_BASE_URL}/api/app-sessions/${encodeURIComponent(targetSessionId)}/closing-summary`,
+      );
+      if (isCurrentSession) {
+        setClosingSummary(response.data);
+        setAppSession(response.data.session);
+      }
+      return response.data;
+    } catch {
+      if (isCurrentSession) {
+        setClosingNotice('โหลดสรุปปิดร้านไม่สำเร็จ');
+      }
+      return null;
+    } finally {
+      if (isCurrentSession) {
+        setIsClosingLoading(false);
+      }
+    }
+  }, [isOwner, scanSessionId]);
 
   useEffect(() => {
+    if (authSession) {
+      axios.defaults.headers.common.Authorization = `Bearer ${authSession.token}`;
+      writeAuthSession(authSession);
+      return;
+    }
+
+    delete axios.defaults.headers.common.Authorization;
+    writeAuthSession(null);
+  }, [authSession]);
+
+  useEffect(() => {
+    if (!authSession || isOwner) {
+      return;
+    }
+
+    if (currentView === 'STOCK' || currentView === 'STAFF') {
+      setCurrentView('POS');
+    }
+    setGasPaid(false);
+    setGasReturnedTankQuantity(0);
+  }, [authSession, currentView, isOwner]);
+
+  useEffect(() => {
+    if (!authSession) {
+      return;
+    }
+
     if (sessionFromUrl) {
       return;
     }
 
     axios.get<AppSessionResponse>(`${API_BASE_URL}/api/app-sessions/today`)
       .then((response) => {
+        setAppSession(response.data);
         setScanSessionId(response.data.session_id);
+        if (response.data.status !== 'OPEN' && response.data.status !== 'ACTIVE') {
+          setCurrentView('CLOSING');
+        }
+        if (isOwner && response.data.previousClosedSession) {
+          void refreshClosingSummary(response.data.previousClosedSession.session_id)
+            .then((summary) => setPreviousClosingSummary(summary));
+        } else {
+          setPreviousClosingSummary(null);
+        }
       })
       .catch(() => {
         // The client-side daily session id is deterministic, so POS can still work once the backend is available.
       });
-  }, [sessionFromUrl]);
+  }, [authSession, isOwner, refreshClosingSummary, sessionFromUrl]);
 
   useEffect(() => {
+    if (!authSession) {
+      return;
+    }
+
     axios.get<ApiProduct[]>(`${API_BASE_URL}/api/products`)
       .then((response) => {
         const normalized = response.data.map(normalizeProduct);
@@ -973,16 +1143,98 @@ export default function App() {
       .catch(() => {
         setApiStatus('เชื่อมต่อ tingkum_db ไม่สำเร็จ');
       });
-  }, []);
+  }, [authSession]);
+
+  useEffect(() => {
+    if (!authSession) {
+      return;
+    }
+
+    axios.get<StaffMember[]>(`${API_BASE_URL}/api/staff`)
+      .then((response) => setStaffMembers(response.data))
+      .catch(() => setApiStatus('โหลดพนักงานจาก tingkum_db ไม่สำเร็จ'));
+  }, [authSession]);
+
+  useEffect(() => {
+    if (!authSession || !isOwner) {
+      setUsers([]);
+      return;
+    }
+
+    axios.get<AuthUser[]>(`${API_BASE_URL}/api/users`)
+      .then((response) => setUsers(response.data.map(normalizeAuthUser)))
+      .catch(() => setApiStatus('โหลด user จาก tingkum_db ไม่สำเร็จ'));
+  }, [authSession, isOwner]);
+
+  useEffect(() => {
+    if (!authSession || !isOwner || currentView !== 'CLOSING') {
+      return;
+    }
+
+    void refreshClosingSummary();
+  }, [authSession, currentView, isOwner, refreshClosingSummary, scanSessionId]);
+
+  useEffect(() => {
+    if (!authSession) {
+      return;
+    }
+
+    const syncLottery = () => {
+      axios.get<LotteryTicket[]>(`${API_BASE_URL}/api/lottery/tickets`)
+        .then((response) => setLotteryTickets(response.data.map(normalizeLotteryTicket)))
+        .catch(() => setLotteryNotice('โหลด stock หวยจาก tingkum_db ไม่สำเร็จ'));
+    };
+
+    syncLottery();
+    const timer = window.setInterval(syncLottery, 3000);
+    return () => window.clearInterval(timer);
+  }, [authSession]);
+
+  useEffect(() => {
+    if (!authSession) {
+      return;
+    }
+
+    const syncLotteryCart = () => {
+      axios.get<CartSessionResponse>(`${API_BASE_URL}/api/lottery-sessions/${encodeURIComponent(scanSessionId)}/cart`)
+        .then((response) => setLotteryCart(response.data.items.map(normalizeCartItem)))
+        .catch(() => setLotteryNotice('sync รายการหวยจาก tingkum_db ไม่สำเร็จ'));
+    };
+
+    syncLotteryCart();
+    const timer = window.setInterval(syncLotteryCart, 1000);
+    return () => window.clearInterval(timer);
+  }, [authSession, scanSessionId]);
+
+  useEffect(() => {
+    if (!authSession) {
+      return;
+    }
+
+    const syncTopups = () => {
+      axios.get<MobileTopupOrder[]>(`${API_BASE_URL}/api/app-sessions/${encodeURIComponent(scanSessionId)}/topups?includeCancelled=${isOwner ? 'true' : 'false'}`)
+        .then((response) => setTopupOrders(response.data.map(normalizeTopupOrder)))
+        .catch(() => setTopupNotice('โหลดรายการเติมเงินจาก tingkum_db ไม่สำเร็จ'));
+    };
+
+    syncTopups();
+    const timer = window.setInterval(syncTopups, 2500);
+    return () => window.clearInterval(timer);
+  }, [authSession, isOwner, scanSessionId]);
+
+  useEffect(() => {
+    if (!authSession || !isOwner) {
+      setStockLog([]);
+      return;
+    }
+
+    axios.get<StockAdjustment[]>(`${API_BASE_URL}/api/stock/movements?date=${encodeURIComponent(stockLogDateFilter)}`)
+      .then((response) => setStockLog(response.data.map(normalizeStockMovement)))
+      .catch(() => setApiStatus('โหลด stock log จาก tingkum_db ไม่สำเร็จ'));
+  }, [authSession, isOwner, stockLogDateFilter]);
 
   useEffect(() => writeStoredValue(storageKeys.appSessionId, scanSessionId), [scanSessionId]);
   useEffect(() => writeStoredValue(storageKeys.deviceId, deviceId), [deviceId]);
-  useEffect(() => writeStoredValue(storageKeys.staffMembers, staffMembers), [staffMembers]);
-  useEffect(() => writeStoredValue(storageKeys.lotteryTickets, lotteryTickets), [lotteryTickets]);
-  useEffect(() => writeStoredValue(storageKeys.mobileTopups, topupOrders), [topupOrders]);
-  useEffect(() => writeStoredValue(storageKeys.salesHistory, salesHistory), [salesHistory]);
-  useEffect(() => writeStoredValue(storageKeys.stockLog, stockLog), [stockLog]);
-  useEffect(() => writeStoredValue(storageKeys.stockLogSequence, stockLogSequence), [stockLogSequence]);
 
   useEffect(() => {
     if (typeof window === 'undefined') {
@@ -1004,6 +1256,10 @@ export default function App() {
   }
 
   useEffect(() => {
+    if (!authSession) {
+      return;
+    }
+
     const syncGas = () => {
       axios.get<GasStateResponse>(`${API_BASE_URL}/api/app-sessions/${encodeURIComponent(scanSessionId)}/gas`)
         .then((response) => {
@@ -1019,9 +1275,13 @@ export default function App() {
     const timer = window.setInterval(syncGas, 2500);
 
     return () => window.clearInterval(timer);
-  }, [scanSessionId]);
+  }, [authSession, scanSessionId]);
 
   useEffect(() => {
+    if (!authSession) {
+      return;
+    }
+
     const syncSales = () => {
       axios.get<ApiSaleRecord[]>(`${API_BASE_URL}/api/app-sessions/${encodeURIComponent(scanSessionId)}/sales`)
         .then((response) => {
@@ -1040,7 +1300,7 @@ export default function App() {
     const timer = window.setInterval(syncSales, 3000);
 
     return () => window.clearInterval(timer);
-  }, [scanSessionId, selectedSaleId]);
+  }, [authSession, scanSessionId, selectedSaleId]);
 
   const analyticsQuery = useMemo(() => {
     const params = new URLSearchParams({ period: analyticsPeriod });
@@ -1057,6 +1317,10 @@ export default function App() {
   }, [analyticsDate, analyticsMonth, analyticsPeriod, analyticsYear]);
 
   useEffect(() => {
+    if (!authSession) {
+      return undefined;
+    }
+
     if (currentView !== 'ANALYTICS') {
       return undefined;
     }
@@ -1076,7 +1340,7 @@ export default function App() {
             startDate: response.data.startDate,
             endDate: response.data.endDate,
           });
-          setAnalyticsNotice(`${records.length} รายการจาก sales_records`);
+          setAnalyticsNotice(`${records.length} รายการจาก sales + topup`);
         })
         .catch(() => {
           if (!cancelled) {
@@ -1097,7 +1361,7 @@ export default function App() {
       cancelled = true;
       window.clearInterval(timer);
     };
-  }, [analyticsQuery, currentView]);
+  }, [analyticsQuery, authSession, currentView]);
 
   useEffect(() => {
     if (currentView !== 'POS' || mobileCheckoutOpen || mobileScannerOpen) {
@@ -1108,6 +1372,10 @@ export default function App() {
   }, [currentView, mobileCheckoutOpen, mobileScannerOpen, posCart.length, unknownBarcode]);
 
   useEffect(() => {
+    if (!authSession) {
+      return undefined;
+    }
+
     if (currentView !== 'POS') {
       return undefined;
     }
@@ -1126,7 +1394,7 @@ export default function App() {
     const timer = window.setInterval(syncCart, 1000);
 
     return () => window.clearInterval(timer);
-  }, [currentView, scanSessionId]);
+  }, [authSession, currentView, scanSessionId]);
 
   useEffect(() => {
     if (!mobileScannerOpen) {
@@ -1184,7 +1452,7 @@ export default function App() {
   const gasReturnedCount = Math.min(gasSelectedCount, Math.max(0, gasReturnedTankQuantity));
   const gasPendingTankCount = Math.max(0, gasSelectedCount - gasReturnedCount);
   const activeGasJobs = gasJobs.filter((job) =>
-    job.status === 'กำลังดำเนินการ' || job.paid === false || job.emptyTankReturned === false,
+    !isCancelledStatus(job.status) && (job.status === 'กำลังดำเนินการ' || job.status === 'PENDING' || job.paid === false || job.emptyTankReturned === false),
   );
 
   useEffect(() => {
@@ -1212,19 +1480,27 @@ export default function App() {
   const selectedCorrectionProductId = stockItems.some((item) => String(item.id) === correctionProductId)
     ? correctionProductId
     : String(stockItems[0]?.id ?? '');
+  const selectedGasCorrectionItemId = gasItems.some((item) => item.id === gasCorrectionItemId)
+    ? gasCorrectionItemId
+    : gasItems[0]?.id ?? '';
+  const analyticsRevenueSales = useMemo(
+    () => analyticsSales.filter((sale) => !isCancelledStatus(sale.status)),
+    [analyticsSales],
+  );
   const analyticsSaleCount = analyticsSales.length;
-  const analyticsTotal = analyticsSales.reduce((sum, sale) => sum + sale.total, 0);
-  const analyticsItemCount = analyticsSales.reduce(
+  const analyticsTotal = analyticsRevenueSales.reduce((sum, sale) => sum + sale.total, 0);
+  const analyticsItemCount = analyticsRevenueSales.reduce(
     (sum, sale) => sum + sale.items.reduce((itemSum, item) => itemSum + item.quantity, 0),
     0,
   );
   const analyticsAverageBill = analyticsSaleCount > 0 ? analyticsTotal / analyticsSaleCount : 0;
-  const analyticsDiscountTotal = analyticsSales.reduce((sum, sale) => sum + sale.discount, 0);
-  const analyticsSuccessfulCount = analyticsSales.filter((sale) =>
-    sale.status === 'สำเร็จ' || sale.status === 'เสร็จแล้ว',
+  const analyticsDiscountTotal = analyticsRevenueSales.reduce((sum, sale) => sum + sale.discount, 0);
+  const analyticsSuccessfulCount = analyticsRevenueSales.filter((sale) =>
+    isCompletedStatus(sale.status),
   ).length;
-  const analyticsPendingCount = analyticsSaleCount - analyticsSuccessfulCount;
-  const analyticsChannelTotals = analyticsSales.reduce<Record<SaleChannel, { total: number; count: number }>>(
+  const analyticsCancelledCount = analyticsSales.length - analyticsRevenueSales.length;
+  const analyticsPendingCount = analyticsRevenueSales.length - analyticsSuccessfulCount;
+  const analyticsChannelTotals = analyticsRevenueSales.reduce<Record<SaleChannel, { total: number; count: number }>>(
     (totals, sale) => {
       const current = totals[sale.channel];
       return {
@@ -1239,13 +1515,14 @@ export default function App() {
       POS: { total: 0, count: 0 },
       GAS: { total: 0, count: 0 },
       LOTTERY: { total: 0, count: 0 },
+      TOPUP: { total: 0, count: 0 },
     },
   );
   const possibleLotteryRevenue = lotteryTickets.reduce((sum, ticket) => sum + ticket.remaining * ticket.price, 0);
   const analyticsPaymentTotals = useMemo(() => {
     const totals = new Map<string, { total: number; count: number }>();
 
-    analyticsSales.forEach((sale) => {
+    analyticsRevenueSales.forEach((sale) => {
       const current = totals.get(sale.paymentMethod) ?? { total: 0, count: 0 };
       totals.set(sale.paymentMethod, {
         total: current.total + sale.total,
@@ -1256,11 +1533,11 @@ export default function App() {
     return Array.from(totals.entries())
       .map(([method, summary]) => ({ method, ...summary }))
       .sort((a, b) => b.total - a.total);
-  }, [analyticsSales]);
+  }, [analyticsRevenueSales]);
   const categorySales = useMemo(() => {
     const totals = new Map<string, number>();
 
-    analyticsSales.forEach((sale) => {
+    analyticsRevenueSales.forEach((sale) => {
       sale.items.forEach((item) => {
         const matchedProduct = stockItems.find((product) =>
           product.barcode === item.barcode || product.name === item.name,
@@ -1278,11 +1555,11 @@ export default function App() {
       .map(([label, value]) => ({ label, value, percent: Math.round((value / maxValue) * 100) }))
       .sort((a, b) => b.value - a.value)
       .slice(0, 6);
-  }, [analyticsSales, stockItems]);
+  }, [analyticsRevenueSales, stockItems]);
   const staffPerformance = useMemo(() => {
     const totals = new Map<string, { total: number; count: number }>();
 
-    analyticsSales.forEach((sale) => {
+    analyticsRevenueSales.forEach((sale) => {
       const current = totals.get(sale.staffName) ?? { total: 0, count: 0 };
       totals.set(sale.staffName, {
         total: current.total + sale.total,
@@ -1293,11 +1570,11 @@ export default function App() {
     return Array.from(totals.entries())
       .map(([name, summary]) => ({ name, ...summary }))
       .sort((a, b) => b.total - a.total);
-  }, [analyticsSales]);
+  }, [analyticsRevenueSales]);
   const analyticsTrendRows = useMemo(() => {
     const buckets = new Map<string, { key: string; label: string; total: number; count: number }>();
 
-    analyticsSales.forEach((sale) => {
+    analyticsRevenueSales.forEach((sale) => {
       const saleDate = sale.createdAt;
       const key = analyticsPeriod === 'day'
         ? `${String(saleDate.getHours()).padStart(2, '0')}:00`
@@ -1318,7 +1595,7 @@ export default function App() {
     });
 
     return Array.from(buckets.values()).sort((a, b) => a.key.localeCompare(b.key));
-  }, [analyticsPeriod, analyticsSales]);
+  }, [analyticsPeriod, analyticsRevenueSales]);
   const analyticsMaxTrendTotal = Math.max(1, ...analyticsTrendRows.map((row) => row.total));
   const analyticsRangeLabel = analyticsPeriod === 'day'
     ? analyticsDate
@@ -1347,6 +1624,208 @@ export default function App() {
     url.searchParams.set('session', scanSessionId);
     return url.toString();
   }, [scanSessionId]);
+
+  async function handleLogin() {
+    const username = loginForm.username.trim();
+    const password = loginForm.password;
+    if (!username || !password) {
+      setLoginNotice('กรอก username และ password');
+      return;
+    }
+
+    try {
+      const response = await axios.post<LoginResponse>(`${API_BASE_URL}/api/auth/login`, { username, password });
+      const session = {
+        ...response.data,
+        user: normalizeAuthUser(response.data.user),
+      };
+      setAuthSession(session);
+      setLoginForm({ username, password: '' });
+      setLoginNotice(`เข้าสู่ระบบเป็น ${session.user.displayName}`);
+    } catch {
+      setLoginNotice('เข้าสู่ระบบไม่สำเร็จ');
+    }
+  }
+
+  async function logout() {
+    try {
+      await axios.post(`${API_BASE_URL}/api/auth/logout`);
+    } catch {
+      // Local logout still clears the browser session.
+    }
+    setAuthSession(null);
+    setUsers([]);
+    setPosCart([]);
+    setLotteryCart([]);
+    setSalesHistory([]);
+    setCurrentMember(null);
+    setCurrentView('POS');
+  }
+
+  async function refreshUsers() {
+    if (!isOwner) {
+      return;
+    }
+
+    const response = await axios.get<AuthUser[]>(`${API_BASE_URL}/api/users`);
+    setUsers(response.data.map(normalizeAuthUser));
+  }
+
+  async function refreshProducts() {
+    const response = await axios.get<ApiProduct[]>(`${API_BASE_URL}/api/products`);
+    setStockItems(response.data.map(normalizeProduct));
+  }
+
+  async function refreshGasItems() {
+    const response = await axios.get<ApiGasItem[]>(`${API_BASE_URL}/api/gas/items`);
+    setGasItems(response.data.map(normalizeGasItem));
+  }
+
+  async function refreshLotteryTickets() {
+    const response = await axios.get<LotteryTicket[]>(`${API_BASE_URL}/api/lottery/tickets`);
+    setLotteryTickets(response.data.map(normalizeLotteryTicket));
+  }
+
+  async function refreshLotteryCart() {
+    const response = await axios.get<CartSessionResponse>(
+      `${API_BASE_URL}/api/lottery-sessions/${encodeURIComponent(scanSessionId)}/cart`,
+    );
+    setLotteryCart(response.data.items.map(normalizeCartItem));
+  }
+
+  async function refreshTopups() {
+    const response = await axios.get<MobileTopupOrder[]>(
+      `${API_BASE_URL}/api/app-sessions/${encodeURIComponent(scanSessionId)}/topups?includeCancelled=${isOwner ? 'true' : 'false'}`,
+    );
+    setTopupOrders(response.data.map(normalizeTopupOrder));
+  }
+
+  async function refreshStockLog() {
+    if (!isOwner) {
+      return;
+    }
+
+    const response = await axios.get<StockAdjustment[]>(
+      `${API_BASE_URL}/api/stock/movements?date=${encodeURIComponent(stockLogDateFilter)}`,
+    );
+    setStockLog(response.data.map(normalizeStockMovement));
+  }
+
+  function requireShopOpen(setNotice?: (message: string) => void) {
+    if (isShopOpen) {
+      return true;
+    }
+
+    const message = shopStatus === 'CLOSED' ? 'ร้านปิดแล้ว ให้ owner กด Reopen วันนี้ก่อนทำรายการ' : 'ต้องเปิดร้านก่อนทำรายการ';
+    setNotice?.(message);
+    setClosingNotice(message);
+    setCurrentView('CLOSING');
+    return false;
+  }
+
+  async function openShop() {
+    if (!isOwner) {
+      setClosingNotice('เฉพาะ owner เท่านั้นที่เปิดร้านได้');
+      return;
+    }
+
+    setIsClosingLoading(true);
+    try {
+      const response = await axios.post<AppSessionResponse>(
+        `${API_BASE_URL}/api/app-sessions/${encodeURIComponent(scanSessionId)}/open`,
+        { reason: 'open shop from topbar' },
+      );
+      setAppSession(response.data);
+      setClosingNotice(`เปิดร้านวันที่ ${response.data.business_date} แล้ว`);
+      await refreshClosingSummary(response.data.session_id);
+      setCurrentView('POS');
+    } catch {
+      setClosingNotice('เปิดร้านไม่สำเร็จ');
+    } finally {
+      setIsClosingLoading(false);
+    }
+  }
+
+  async function confirmClosingSection(section: ClosingSection) {
+    if (!isOwner) {
+      setClosingNotice('เฉพาะ owner เท่านั้นที่ยืนยันยอดปิดร้านได้');
+      return;
+    }
+
+    const currentCheck = closingSummary?.checks.find((check) => check.section === section);
+    setIsClosingLoading(true);
+    try {
+      const response = await axios.patch<ClosingSummary>(
+        `${API_BASE_URL}/api/app-sessions/${encodeURIComponent(scanSessionId)}/closing-checks/${section}`,
+        { confirmed: !currentCheck?.confirmed },
+      );
+      setClosingSummary(response.data);
+      setAppSession(response.data.session);
+      setClosingNotice(`${closingSectionMeta[section].label} ${currentCheck?.confirmed ? 'ยกเลิกการยืนยันแล้ว' : 'เช็คยอดแล้ว'}`);
+    } catch {
+      setClosingNotice('บันทึกการเช็คยอดไม่สำเร็จ');
+    } finally {
+      setIsClosingLoading(false);
+    }
+  }
+
+  async function closeShop() {
+    if (!isOwner) {
+      setClosingNotice('เฉพาะ owner เท่านั้นที่ปิดร้านได้');
+      return;
+    }
+
+    setIsClosingLoading(true);
+    try {
+      const response = await axios.post<ClosingSummary>(
+        `${API_BASE_URL}/api/app-sessions/${encodeURIComponent(scanSessionId)}/close`,
+        { reason: 'close shop from closing page' },
+      );
+      setClosingSummary(response.data);
+      setAppSession(response.data.session);
+      setClosingNotice(`ปิดร้านวันที่ ${response.data.session.business_date} แล้ว`);
+    } catch (error) {
+      if (axios.isAxiosError(error) && error.response?.status === 409) {
+        setClosingNotice('ต้องยืนยันยอดทุกหมวดก่อนปิดร้าน');
+        const summary = error.response.data?.summary as ClosingSummary | undefined;
+        if (summary) {
+          setClosingSummary(summary);
+        }
+        return;
+      }
+      setClosingNotice('ปิดร้านไม่สำเร็จ');
+    } finally {
+      setIsClosingLoading(false);
+    }
+  }
+
+  async function reopenShop() {
+    if (!isOwner) {
+      setClosingNotice('เฉพาะ owner เท่านั้นที่เปิดร้านซ้ำได้');
+      return;
+    }
+
+    const reason = window.prompt('เหตุผลที่เปิดร้านวันนี้ซ้ำ')?.trim();
+    if (!reason) {
+      return;
+    }
+
+    setIsClosingLoading(true);
+    try {
+      const response = await axios.post<ClosingSummary>(
+        `${API_BASE_URL}/api/app-sessions/${encodeURIComponent(scanSessionId)}/reopen`,
+        { reason },
+      );
+      setClosingSummary(response.data);
+      setAppSession(response.data.session);
+      setClosingNotice(`เปิดร้านซ้ำวันที่ ${response.data.session.business_date} แล้ว ต้องเช็คยอดใหม่ก่อนปิดร้านอีกครั้ง`);
+      setCurrentView('POS');
+    } catch {
+      setClosingNotice('เปิดร้านซ้ำไม่สำเร็จ');
+    } finally {
+      setIsClosingLoading(false);
+    }
+  }
 
   function applyCartSession(response: CartSessionResponse) {
     setPosCart(response.items.map(normalizeCartItem));
@@ -1383,6 +1862,10 @@ export default function App() {
   }, [markPrintRequest]);
 
   useEffect(() => {
+    if (!authSession) {
+      return undefined;
+    }
+
     if (isMobileViewport) {
       return undefined;
     }
@@ -1405,9 +1888,13 @@ export default function App() {
     const timer = window.setInterval(syncPrintRequests, 1500);
 
     return () => window.clearInterval(timer);
-  }, [handlePrintRequest, isMobileViewport, scanSessionId]);
+  }, [authSession, handlePrintRequest, isMobileViewport, scanSessionId]);
 
   async function handleBarcodeValue(rawBarcode: string, source: 'desktop' | 'mobile' = 'desktop') {
+    if (!requireShopOpen(setPosNotice)) {
+      return;
+    }
+
     const query = rawBarcode.trim().toLowerCase();
     if (!query) {
       setPosNotice('กรอกหรือแสกนบาร์โค้ดก่อน');
@@ -1569,6 +2056,11 @@ export default function App() {
   }
 
   async function registerNewProductFromScan() {
+    if (!isOwner) {
+      setPosNotice('เฉพาะ owner เท่านั้นที่ลงทะเบียนสินค้าใหม่ได้');
+      return;
+    }
+
     const name = newProductDraft.name.trim();
     const barcode = newProductDraft.barcode.trim();
     const price = Number(newProductDraft.price);
@@ -1599,6 +2091,9 @@ export default function App() {
         cost: price,
         stock,
         category: product.category,
+        minStock: product.minStock,
+        unit: product.unit,
+        reason: 'register from POS scan',
       });
       product = {
         ...normalizeProduct(response.data),
@@ -1629,14 +2124,57 @@ export default function App() {
     setPosNotice(`ลงทะเบียนและเพิ่ม ${product.name} เข้า bill แล้ว`);
   }
 
-  function lookupMember() {
+  async function lookupMember() {
     const normalizedPhone = memberPhone.replace(/\D/g, '');
-    const member = sampleMembers.find((item) => item.phone === normalizedPhone);
-    setCurrentMember(member ?? null);
-    setPosNotice(member ? `พบสมาชิก ${member.name}` : 'ไม่พบสมาชิก เบอร์นี้ขายแบบลูกค้าทั่วไปได้');
+    if (!/^0\d{9}$/.test(normalizedPhone)) {
+      setCurrentMember(null);
+      setPosNotice('กรอกเบอร์มือถือ 10 หลักเพื่อค้นหา member');
+      return;
+    }
+
+    try {
+      const response = await axios.get<Member[]>(`${API_BASE_URL}/api/members?phone=${encodeURIComponent(normalizedPhone)}`);
+      const member = response.data[0] ?? null;
+      setCurrentMember(member);
+      setPosNotice(member ? `พบสมาชิก ${member.name}` : 'ไม่พบสมาชิก เบอร์นี้ขายแบบลูกค้าทั่วไปได้');
+    } catch {
+      setCurrentMember(null);
+      setPosNotice('ค้นหา member จาก tingkum_db ไม่สำเร็จ');
+    }
+  }
+
+  async function createMemberFromPhone() {
+    if (!isOwner) {
+      setPosNotice('เฉพาะ owner เท่านั้นที่สร้าง member ได้');
+      return;
+    }
+
+    const phone = memberPhone.replace(/\D/g, '');
+    if (!/^0\d{9}$/.test(phone)) {
+      setPosNotice('กรอกเบอร์มือถือ 10 หลักก่อนสร้าง member');
+      return;
+    }
+
+    const name = window.prompt(`ชื่อลูกค้าสำหรับเบอร์ ${phone}`)?.trim();
+    if (!name) {
+      return;
+    }
+    const note = window.prompt('หมายเหตุ member')?.trim() ?? '';
+
+    try {
+      const response = await axios.post<Member>(`${API_BASE_URL}/api/members`, { name, phone, note });
+      setCurrentMember(response.data);
+      setPosNotice(`สร้าง member ${response.data.name} แล้ว`);
+    } catch {
+      setPosNotice('สร้าง member ไม่สำเร็จ');
+    }
   }
 
   async function updateCartQuantity(id: string, delta: number) {
+    if (!requireShopOpen(setPosNotice)) {
+      return;
+    }
+
     const cartItem = posCart.find((item) => item.id === id);
     if (!cartItem) {
       return;
@@ -1693,6 +2231,10 @@ export default function App() {
   }
 
   async function clearPosCart() {
+    if (!requireShopOpen(setPosNotice)) {
+      return;
+    }
+
     setPosCart([]);
 
     try {
@@ -1706,6 +2248,10 @@ export default function App() {
   }
 
   async function completePosSale() {
+    if (!requireShopOpen(setPosNotice)) {
+      return;
+    }
+
     const cashier = staffMembers.find((staff) => staff.id === cashierId);
     if (posCart.length === 0) {
       setPosNotice('ยังไม่มีสินค้าในบิล');
@@ -1794,6 +2340,10 @@ export default function App() {
   }
 
   function updateGasReturnedTankQuantity(delta: number) {
+    if (!isOwner) {
+      return;
+    }
+
     setGasReturnedTankQuantity((previous) =>
       Math.max(0, Math.min(gasSelectedCount, previous + delta)),
     );
@@ -1805,6 +2355,10 @@ export default function App() {
   }
 
   function updatePendingReturnQuantity(item: PendingGasReturn, delta: number) {
+    if (!isOwner) {
+      return;
+    }
+
     setGasPendingReturnQuantities((previous) => ({
       ...previous,
       [item.id]: Math.max(1, Math.min(item.quantity, pendingReturnQuantityFor(item) + delta)),
@@ -1812,6 +2366,10 @@ export default function App() {
   }
 
   async function createGasJob() {
+    if (!requireShopOpen(setGasNotice)) {
+      return;
+    }
+
     if (gasOrderItems.length === 0) {
       setGasNotice('เลือกถังแก๊สอย่างน้อย 1 รายการ');
       return;
@@ -1852,7 +2410,7 @@ export default function App() {
       setGasQuantities({});
       setGasCustomer({ name: '', phone: '', address: '' });
       setGasReturnedTankQuantity(0);
-      setGasPaid(true);
+      setGasPaid(isOwner);
       setGasNotice(`สร้างงาน ${saleRecord.id} แล้ว`);
     } catch (error) {
       if (axios.isAxiosError(error) && error.response?.status === 409) {
@@ -1865,6 +2423,11 @@ export default function App() {
   }
 
   async function completeGasJob(id: string) {
+    if (!isOwner) {
+      setGasNotice('เฉพาะ owner เท่านั้นที่กดจ่ายแล้ว/ปิดงานได้');
+      return;
+    }
+
     try {
       const response = await axios.patch<GasStateResponse>(
         `${API_BASE_URL}/api/app-sessions/${encodeURIComponent(scanSessionId)}/gas/jobs/${encodeURIComponent(id)}`,
@@ -1891,6 +2454,11 @@ export default function App() {
   }
 
   async function completeGasReturn(id: string, quantity?: number) {
+    if (!isOwner) {
+      setGasNotice('เฉพาะ owner เท่านั้นที่รับคืนถังได้');
+      return;
+    }
+
     const returnItem = pendingGasReturns.find((item) => item.id === id);
     try {
       const response = await axios.patch<GasStateResponse>(
@@ -1924,39 +2492,111 @@ export default function App() {
     }
   }
 
+  async function cancelGasJob(id: string) {
+    if (!isOwner) {
+      setGasNotice('เฉพาะ owner เท่านั้นที่ยกเลิกรายการแก๊สได้');
+      return;
+    }
+
+    const reason = window.prompt('เหตุผลที่ยกเลิกรายการแก๊ส')?.trim();
+    if (!reason) {
+      return;
+    }
+
+    try {
+      const response = await axios.post<GasStateResponse>(
+        `${API_BASE_URL}/api/app-sessions/${encodeURIComponent(scanSessionId)}/gas/jobs/${encodeURIComponent(id)}/cancel`,
+        { reason },
+      );
+      applyGasState(response.data);
+      const salesResponse = await axios.get<ApiSaleRecord[]>(`${API_BASE_URL}/api/app-sessions/${encodeURIComponent(scanSessionId)}/sales`);
+      setSalesHistory(salesResponse.data.map(normalizeSaleRecord));
+      await refreshProducts();
+      setGasNotice(`ยกเลิกรายการ ${id} แล้ว`);
+    } catch {
+      setGasNotice('ยกเลิกรายการแก๊สไม่สำเร็จ');
+    }
+  }
+
+  async function cancelSaleRecord(sale: SaleRecord) {
+    if (!isOwner) {
+      setHistoryNotice('เฉพาะ owner เท่านั้นที่ยกเลิกรายการขายได้');
+      return;
+    }
+
+    if (isCancelledStatus(sale.status)) {
+      setHistoryNotice('รายการนี้ถูกยกเลิกแล้ว');
+      return;
+    }
+
+    const reason = window.prompt(`เหตุผลที่ยกเลิกรายการ ${sale.id}`)?.trim();
+    if (!reason) {
+      return;
+    }
+
+    if (sale.channel === 'TOPUP') {
+      try {
+        await axios.delete(
+          `${API_BASE_URL}/api/app-sessions/${encodeURIComponent(scanSessionId)}/topups/${encodeURIComponent(sale.id)}`,
+          { data: { reason } },
+        );
+        const salesResponse = await axios.get<ApiSaleRecord[]>(`${API_BASE_URL}/api/app-sessions/${encodeURIComponent(scanSessionId)}/sales`);
+        const records = salesResponse.data.map(normalizeSaleRecord);
+        setSalesHistory(records);
+        setSelectedSaleId(sale.id);
+        await refreshTopups();
+        setHistoryNotice(`ยกเลิกรายการ ${sale.id} แล้ว`);
+      } catch {
+        setHistoryNotice('ยกเลิกรายการเติมเงินไม่สำเร็จ');
+      }
+      return;
+    }
+
+    try {
+      const response = await axios.post<ApiSaleRecord>(
+        `${API_BASE_URL}/api/app-sessions/${encodeURIComponent(scanSessionId)}/sales/${encodeURIComponent(sale.id)}/cancel`,
+        { reason },
+      );
+      const cancelledSale = normalizeSaleRecord(response.data);
+      setSalesHistory((previous) => previous.map((item) => item.id === sale.id ? cancelledSale : item));
+      setSelectedSaleId(cancelledSale.id);
+      await refreshProducts();
+      await refreshLotteryTickets();
+      setHistoryNotice(`ยกเลิกรายการ ${sale.id} แล้ว`);
+    } catch {
+      setHistoryNotice('ยกเลิกรายการขายไม่สำเร็จ');
+    }
+  }
+
   function lotteryAvailable(ticket: LotteryTicket) {
-    const inCart = lotteryCart.find((item) => item.id === ticket.number)?.quantity ?? 0;
+    const inCart = lotteryCart.find((item) => item.id === String(ticket.id))?.quantity ?? 0;
     return ticket.remaining - inCart;
   }
 
-  function addLotteryTicket(ticket: LotteryTicket) {
+  async function addLotteryTicket(ticket: LotteryTicket) {
+    if (!requireShopOpen(setLotteryNotice)) {
+      return;
+    }
+
     if (lotteryAvailable(ticket) <= 0) {
       setLotteryNotice(`เลข ${ticket.number} หมดแล้ว`);
       return;
     }
 
-    setLotteryCart((previous) => {
-      const existing = previous.find((item) => item.id === ticket.number);
-      if (existing) {
-        return previous.map((item) =>
-          item.id === ticket.number ? { ...item, quantity: item.quantity + 1 } : item,
-        );
+    try {
+      const response = await axios.post<CartSessionResponse>(
+        `${API_BASE_URL}/api/lottery-sessions/${encodeURIComponent(scanSessionId)}/cart/items`,
+        { number: ticket.number },
+      );
+      setLotteryCart(response.data.items.map(normalizeCartItem));
+      setLotteryNotice(`เพิ่มเลข ${ticket.number} แล้ว`);
+    } catch (error) {
+      if (axios.isAxiosError(error) && error.response?.status === 409) {
+        setLotteryNotice(`เลข ${ticket.number} คงเหลือไม่พอ`);
+        return;
       }
-
-      return [
-        ...previous,
-        {
-          id: ticket.number,
-          name: `หวยเลข ${ticket.number}`,
-          barcode: ticket.series,
-          price: ticket.price,
-          quantity: 1,
-          discount: 0,
-          item_type: 'LOTTERY',
-        },
-      ];
-    });
-    setLotteryNotice(`เพิ่มเลข ${ticket.number} แล้ว`);
+      setLotteryNotice('เพิ่มเลขหวยจาก tingkum_db ไม่สำเร็จ');
+    }
   }
 
   function searchLottery() {
@@ -1966,33 +2606,45 @@ export default function App() {
       setLotteryNotice(`ไม่พบเลข ${number || '-'}`);
       return;
     }
-    addLotteryTicket(ticket);
+    void addLotteryTicket(ticket);
     setLotteryInput('');
   }
 
-  function removeLottery(id: string) {
-    setLotteryCart((previous) => previous.filter((item) => item.id !== id));
+  async function removeLottery(id: string) {
+    try {
+      const response = await axios.delete<CartSessionResponse>(
+        `${API_BASE_URL}/api/lottery-sessions/${encodeURIComponent(scanSessionId)}/cart/items/${encodeURIComponent(id)}`,
+      );
+      setLotteryCart(response.data.items.map(normalizeCartItem));
+    } catch {
+      setLotteryNotice('ลบเลขจากรายการไม่สำเร็จ');
+    }
   }
 
-  function updateLotteryQuantity(id: string, delta: number) {
-    const ticket = lotteryTickets.find((item) => item.number === id);
+  async function updateLotteryQuantity(id: string, delta: number) {
+    const ticket = lotteryTickets.find((item) => String(item.id) === id);
+    const cartItem = lotteryCart.find((item) => item.id === id);
     if (!ticket) {
       return;
     }
 
-    setLotteryCart((previous) =>
-      previous.map((item) => {
-        if (item.id !== id) {
-          return item;
-        }
-
-        const nextQuantity = Math.max(1, Math.min(ticket.remaining, item.quantity + delta));
-        return { ...item, quantity: nextQuantity };
-      }),
-    );
+    const nextQuantity = Math.max(1, Math.min(ticket.remaining, (cartItem?.quantity ?? 1) + delta));
+    try {
+      const response = await axios.patch<CartSessionResponse>(
+        `${API_BASE_URL}/api/lottery-sessions/${encodeURIComponent(scanSessionId)}/cart/items/${encodeURIComponent(id)}`,
+        { quantity: nextQuantity },
+      );
+      setLotteryCart(response.data.items.map(normalizeCartItem));
+    } catch {
+      setLotteryNotice('ปรับจำนวนเลขหวยไม่สำเร็จ');
+    }
   }
 
   async function completeLotterySale() {
+    if (!requireShopOpen(setLotteryNotice)) {
+      return;
+    }
+
     if (lotteryCart.length === 0) {
       setLotteryNotice('ยังไม่มีเลขในรายการขาย');
       return;
@@ -2004,7 +2656,7 @@ export default function App() {
     }
 
     const insufficientTicket = lotteryCart.find((cartItem) => {
-      const ticket = lotteryTickets.find((item) => item.number === cartItem.id);
+      const ticket = lotteryTickets.find((item) => String(item.id) === cartItem.id);
       return !ticket || cartItem.quantity > ticket.remaining;
     });
     if (insufficientTicket) {
@@ -2038,20 +2690,22 @@ export default function App() {
     };
 
     try {
-      await axios.post<ApiSaleRecord>(
-        `${API_BASE_URL}/api/app-sessions/${encodeURIComponent(scanSessionId)}/sales`,
-        saleRecord,
+      const response = await axios.post<{ sale: ApiSaleRecord; cart: CartSessionResponse }>(
+        `${API_BASE_URL}/api/app-sessions/${encodeURIComponent(scanSessionId)}/lottery/checkout`,
+        {
+          cashierName: saleRecord.staffName,
+          customerName: saleRecord.customerName,
+          paymentMethod: lotteryPayment,
+          cashReceived: lotteryPayment === 'เงินสด' ? lotteryReceived : lotterySubtotal,
+          note: saleRecord.note,
+        },
       );
-      setSalesHistory((previous) => [saleRecord, ...previous.filter((sale) => sale.id !== saleRecord.id)]);
-      setSelectedSaleId(saleRecord.id);
-      setLotteryTickets((previous) =>
-        previous.map((ticket) => {
-          const soldItem = lotteryCart.find((item) => item.id === ticket.number);
-          return soldItem ? { ...ticket, remaining: Math.max(0, ticket.remaining - soldItem.quantity) } : ticket;
-        }),
-      );
+      const completedSale = normalizeSaleRecord(response.data.sale);
+      setSalesHistory((previous) => [completedSale, ...previous.filter((sale) => sale.id !== completedSale.id)]);
+      setSelectedSaleId(completedSale.id);
+      setLotteryCart(response.data.cart.items.map(normalizeCartItem));
+      await refreshLotteryTickets();
       setLotteryNotice(`ขายหวยสำเร็จ ${formatMoney(lotterySubtotal)}`);
-      setLotteryCart([]);
       setLotteryReceived(0);
     } catch {
       setLotteryNotice('บันทึกขายหวยไม่สำเร็จ เพราะเชื่อมต่อ tingkum_db ไม่ได้');
@@ -2066,7 +2720,11 @@ export default function App() {
     setTopupPhone((previous) => previous.slice(0, -1));
   }
 
-  function confirmTopupOrder() {
+  async function confirmTopupOrder() {
+    if (!requireShopOpen(setTopupNotice)) {
+      return;
+    }
+
     const phone = topupPhone.trim();
     const amount = Number(topupAmount);
 
@@ -2080,37 +2738,73 @@ export default function App() {
       return;
     }
 
-    const createdAt = new Date();
-    const order: MobileTopupOrder = {
-      id: createTopupId(createdAt),
-      provider: topupProvider,
-      phone,
-      amount,
-      toppedUp: false,
-      paid: false,
-      createdAt,
-    };
-
-    setTopupOrders((previous) => [order, ...previous]);
-    setTopupPhone('');
-    setTopupAmount(String(amount));
-    setTopupNotice(`เพิ่มรายการ ${topupProvider} ${phone} ${formatMoney(amount)} แล้ว`);
+    try {
+      const response = await axios.post<MobileTopupOrder>(
+        `${API_BASE_URL}/api/app-sessions/${encodeURIComponent(scanSessionId)}/topups`,
+        { provider: topupProvider, phone, amount },
+      );
+      const order = normalizeTopupOrder(response.data);
+      setTopupOrders((previous) => [order, ...previous.filter((item) => item.id !== order.id)]);
+      setTopupPhone('');
+      setTopupAmount(String(amount));
+      setTopupNotice(`เพิ่มรายการ ${topupProvider} ${phone} ${formatMoney(amount)} แล้ว`);
+    } catch {
+      setTopupNotice('เพิ่มรายการเติมเงินลง tingkum_db ไม่สำเร็จ');
+    }
   }
 
-  function toggleTopupOrderStatus(id: string, field: 'toppedUp' | 'paid') {
-    setTopupOrders((previous) =>
-      previous.map((order) =>
-        order.id === id ? { ...order, [field]: !order[field] } : order,
-      ),
-    );
+  async function toggleTopupOrderStatus(id: string, field: 'toppedUp' | 'paid') {
+    if (!isOwner) {
+      setTopupNotice('เฉพาะ owner เท่านั้นที่เปลี่ยนสถานะเติมแล้ว/จ่ายแล้วได้');
+      return;
+    }
+
+    const order = topupOrders.find((item) => item.id === id);
+    if (!order) {
+      return;
+    }
+
+    try {
+      const response = await axios.patch<MobileTopupOrder>(
+        `${API_BASE_URL}/api/app-sessions/${encodeURIComponent(scanSessionId)}/topups/${encodeURIComponent(id)}`,
+        { [field]: !order[field], reason: `toggle ${field}` },
+      );
+      const updated = normalizeTopupOrder(response.data);
+      setTopupOrders((previous) => previous.map((item) => item.id === id ? updated : item));
+    } catch {
+      setTopupNotice('เปลี่ยนสถานะเติมเงินไม่สำเร็จ');
+    }
   }
 
-  function removeTopupOrder(id: string) {
-    setTopupOrders((previous) => previous.filter((order) => order.id !== id));
-    setTopupNotice(`ลบรายการ ${id} แล้ว`);
+  async function removeTopupOrder(id: string) {
+    if (!isOwner) {
+      setTopupNotice('เฉพาะ owner เท่านั้นที่ยกเลิกรายการเติมเงินได้');
+      return;
+    }
+
+    const reason = window.prompt('เหตุผลที่ยกเลิกรายการเติมเงิน')?.trim();
+    if (!reason) {
+      return;
+    }
+
+    try {
+      await axios.delete(
+        `${API_BASE_URL}/api/app-sessions/${encodeURIComponent(scanSessionId)}/topups/${encodeURIComponent(id)}`,
+        { data: { reason } },
+      );
+      await refreshTopups();
+      setTopupNotice(`ยกเลิกรายการ ${id} แล้ว`);
+    } catch {
+      setTopupNotice('ยกเลิกรายการเติมเงินไม่สำเร็จ');
+    }
   }
 
   async function applyStockCorrection() {
+    if (!isOwner) {
+      setApiStatus('เฉพาะ owner เท่านั้นที่ปรับ stock ได้');
+      return;
+    }
+
     const product = stockItems.find((item) => String(item.id) === selectedCorrectionProductId);
     const delta = Number(correctionDelta);
     if (!product || !Number.isFinite(delta) || delta === 0) {
@@ -2133,30 +2827,200 @@ export default function App() {
           item.id === product.id ? { ...item, ...updatedProduct } : item,
         ),
       );
+      await refreshStockLog();
       setApiStatus('ปรับ stock ใน tingkum_db แล้ว');
     } catch {
       setApiStatus('ปรับ stock ไม่สำเร็จ | เชื่อมต่อ tingkum_db ไม่ได้');
       return;
     }
 
-    setStockLog((previous) => [
-      {
-        id: `LOG-${String(stockLogSequence).padStart(3, '0')}`,
-        productName: product.name,
-        delta,
-        reason: correctionReason.trim(),
-        staffName: staffMembers.find((staff) => staff.id === cashierId)?.name ?? 'ไม่ระบุ',
-        createdAt: currentTimeLabel(),
-        date: currentDateInput(),
-      },
-      ...previous,
-    ]);
-    setStockLogSequence((previous) => previous + 1);
     setCorrectionDelta('1');
     setCorrectionReason('');
   }
 
-  function addManualLotteryStock() {
+  async function createStockProduct() {
+    if (!isOwner) {
+      setApiStatus('เฉพาะ owner เท่านั้นที่เพิ่มสินค้าได้');
+      return;
+    }
+
+    const barcode = stockProductDraft.barcode.trim();
+    const name = stockProductDraft.name.trim();
+    const price = Number(stockProductDraft.price);
+    const stock = Number(stockProductDraft.stock);
+    const minStock = Number(stockProductDraft.minStock);
+    const category = stockProductDraft.category.trim() || 'ทั่วไป';
+    const unit = stockProductDraft.unit.trim() || 'ชิ้น';
+
+    if (!barcode || !name || !Number.isFinite(price) || price <= 0 || !Number.isFinite(stock) || stock < 0) {
+      setApiStatus('กรอกบาร์โค้ด ชื่อสินค้า ราคา และจำนวนเริ่มต้นให้ถูกต้อง');
+      return;
+    }
+
+    try {
+      const response = await axios.post<ApiProduct>(`${API_BASE_URL}/api/products`, {
+        barcode,
+        name,
+        price,
+        cost: price,
+        stock,
+        category,
+        minStock: Number.isFinite(minStock) ? minStock : 5,
+        unit,
+        reason: 'create product from stock page',
+      });
+      const product = normalizeProduct(response.data);
+      await refreshProducts();
+      await refreshStockLog();
+      setSelectedStockCategory(product.category);
+      setCorrectionProductId(String(product.id));
+      setStockProductDraft({
+        barcode: '',
+        name: '',
+        price: '',
+        stock: '1',
+        category,
+        minStock: '5',
+        unit,
+      });
+      setApiStatus(`เพิ่มสินค้า ${product.name} ลง tingkum_db แล้ว`);
+    } catch (error) {
+      if (axios.isAxiosError(error) && error.response?.status === 409) {
+        setApiStatus(`บาร์โค้ด ${barcode} มีอยู่แล้ว`);
+        return;
+      }
+      setApiStatus('เพิ่มสินค้าไม่สำเร็จ');
+    }
+  }
+
+  async function deleteStockProduct(product: Product) {
+    if (!isOwner) {
+      setApiStatus('เฉพาะ owner เท่านั้นที่ลบสินค้าได้');
+      return;
+    }
+
+    const reason = window.prompt(`เหตุผลที่ลบสินค้า ${product.name}`)?.trim();
+    if (!reason) {
+      return;
+    }
+
+    try {
+      await axios.delete(`${API_BASE_URL}/api/products/${product.id}`, { data: { reason } });
+      await refreshProducts();
+      await refreshStockLog();
+      setApiStatus(`ลบสินค้า ${product.name} แล้ว`);
+    } catch {
+      setApiStatus('ลบสินค้าไม่สำเร็จ');
+    }
+  }
+
+  async function createGasStockItem() {
+    if (!isOwner) {
+      setApiStatus('เฉพาะ owner เท่านั้นที่เพิ่มรายการแก๊สได้');
+      return;
+    }
+
+    const id = gasItemDraft.id.trim().toUpperCase();
+    const name = gasItemDraft.name.trim();
+    const operation = gasItemDraft.operation.trim() || 'ขายแก๊ส';
+    const price = Number(gasItemDraft.price);
+    const stock = Number(gasItemDraft.stock);
+    const imageUrl = gasItemDraft.imageUrl.trim();
+
+    if (!id || !name || !Number.isFinite(price) || price <= 0 || !Number.isFinite(stock) || stock < 0) {
+      setApiStatus('กรอกรหัส ชื่อถัง ราคา และจำนวนแก๊สให้ถูกต้อง');
+      return;
+    }
+
+    try {
+      const response = await axios.post<ApiGasItem>(`${API_BASE_URL}/api/gas/items`, {
+        id,
+        name,
+        operation,
+        price,
+        stock,
+        imageUrl,
+        reason: 'create gas item from stock page',
+      });
+      const gasItem = normalizeGasItem(response.data);
+      await refreshGasItems();
+      await refreshStockLog();
+      setGasCorrectionItemId(gasItem.id);
+      setGasItemDraft({
+        id: '',
+        name: '',
+        operation,
+        price: '',
+        stock: '1',
+        imageUrl: '',
+      });
+      setApiStatus(`เพิ่มแก๊ส ${gasItem.name} ลง tingkum_db แล้ว`);
+    } catch {
+      setApiStatus('เพิ่มรายการแก๊สไม่สำเร็จ');
+    }
+  }
+
+  async function deleteGasStockItem(item: GasItem) {
+    if (!isOwner) {
+      setApiStatus('เฉพาะ owner เท่านั้นที่ลบรายการแก๊สได้');
+      return;
+    }
+
+    const reason = window.prompt(`เหตุผลที่ลบรายการแก๊ส ${item.name}`)?.trim();
+    if (!reason) {
+      return;
+    }
+
+    try {
+      await axios.delete(`${API_BASE_URL}/api/gas/items/${encodeURIComponent(item.id)}`, { data: { reason } });
+      await refreshGasItems();
+      await refreshStockLog();
+      setApiStatus(`ลบรายการแก๊ส ${item.name} แล้ว`);
+    } catch {
+      setApiStatus('ลบรายการแก๊สไม่สำเร็จ');
+    }
+  }
+
+  async function applyGasStockCorrection() {
+    if (!isOwner) {
+      setApiStatus('เฉพาะ owner เท่านั้นที่ปรับ stock แก๊สได้');
+      return;
+    }
+
+    const gasItem = gasItems.find((item) => item.id === selectedGasCorrectionItemId);
+    const delta = Number(gasCorrectionDelta);
+    if (!gasItem || !Number.isFinite(delta) || delta === 0) {
+      return;
+    }
+
+    if (!gasCorrectionReason.trim()) {
+      setGasCorrectionReason('กรุณาระบุเหตุผล');
+      return;
+    }
+
+    try {
+      await axios.patch<ApiGasItem>(
+        `${API_BASE_URL}/api/gas/items/${encodeURIComponent(gasItem.id)}/stock`,
+        { delta, reason: gasCorrectionReason.trim() },
+      );
+      await refreshGasItems();
+      await refreshStockLog();
+      setApiStatus('ปรับ stock แก๊สใน tingkum_db แล้ว');
+    } catch {
+      setApiStatus('ปรับ stock แก๊สไม่สำเร็จ');
+      return;
+    }
+
+    setGasCorrectionDelta('1');
+    setGasCorrectionReason('');
+  }
+
+  async function addManualLotteryStock() {
+    if (!isOwner) {
+      setLotteryStockNotice('เฉพาะ owner เท่านั้นที่จัดการ stock หวยได้');
+      return;
+    }
+
     const number = lotteryStockDraft.number.trim();
     const quantity = Math.floor(Number(lotteryStockDraft.quantity));
     const price = Number(lotteryStockDraft.price);
@@ -2166,67 +3030,147 @@ export default function App() {
       return;
     }
 
-    setLotteryTickets((previous) => {
-      const existing = previous.find((ticket) => ticket.number === number);
-      if (existing) {
-        return previous
-          .map((ticket) =>
-            ticket.number === number
-              ? { ...ticket, remaining: ticket.remaining + quantity, price }
-              : ticket,
-          )
-          .sort((a, b) => a.number.localeCompare(b.number));
-      }
-
-      return [
-        ...previous,
-        {
-          number,
-          series: 'Manual',
-          price,
-          remaining: quantity,
-        },
-      ].sort((a, b) => a.number.localeCompare(b.number));
-    });
-
-    setLotteryCart((previous) =>
-      previous.map((item) =>
-        item.id === number ? { ...item, price } : item,
-      ),
-    );
-    setLotteryStockDraft({ number: '', quantity: '1', price: String(price) });
-    setLotteryStockNotice(`เพิ่ม/อัปเดตเลข ${number} จำนวน ${quantity} ใบแล้ว`);
-    setLotteryNotice(`stock เลข ${number} พร้อมขายแล้ว`);
+    try {
+      const response = await axios.post<LotteryTicket>(`${API_BASE_URL}/api/lottery/tickets`, {
+        number,
+        quantity,
+        price,
+        series: 'Manual',
+        reason: 'manual lottery stock',
+      });
+      await refreshLotteryTickets();
+      await refreshStockLog();
+      setLotteryCart((previous) =>
+        previous.map((item) =>
+          item.id === String(response.data.id) ? { ...item, price } : item,
+        ),
+      );
+      setLotteryStockDraft({ number: '', quantity: '1', price: String(price) });
+      setLotteryStockNotice(`เพิ่ม/อัปเดตเลข ${number} จำนวน ${quantity} ใบแล้ว`);
+      setLotteryNotice(`stock เลข ${number} พร้อมขายแล้ว`);
+    } catch {
+      setLotteryStockNotice('เพิ่ม stock หวยลง tingkum_db ไม่สำเร็จ');
+    }
   }
 
-  function removeManualLotteryStock(number: string) {
-    setLotteryTickets((previous) => previous.filter((ticket) => ticket.number !== number));
-    setLotteryCart((previous) => previous.filter((item) => item.id !== number));
-    setLotteryStockNotice(`ลบเลข ${number} ออกจาก stock หวยแล้ว`);
+  async function removeManualLotteryStock(number: string) {
+    if (!isOwner) {
+      setLotteryStockNotice('เฉพาะ owner เท่านั้นที่ลบ stock หวยได้');
+      return;
+    }
+
+    const ticket = lotteryTickets.find((item) => item.number === number || String(item.id) === number);
+    if (!ticket) {
+      return;
+    }
+
+    try {
+      await axios.delete(`${API_BASE_URL}/api/lottery/tickets/${encodeURIComponent(String(ticket.id))}`, {
+        data: { reason: 'remove lottery stock' },
+      });
+      await refreshLotteryTickets();
+      await refreshLotteryCart();
+      setLotteryStockNotice(`ลบเลข ${ticket.number} ออกจาก stock หวยแล้ว`);
+    } catch {
+      setLotteryStockNotice('ลบ stock หวยจาก tingkum_db ไม่สำเร็จ');
+    }
   }
 
-  function addStaff() {
+  async function addStaff() {
+    if (!isOwner) {
+      return;
+    }
+
     if (!staffForm.name.trim() || !staffForm.phone.trim()) {
       return;
     }
 
-    setStaffMembers((previous) => [
-      ...previous,
-      {
-        id: `S-${String(previous.length + 1).padStart(3, '0')}`,
-        name: staffForm.name.trim(),
-        phone: staffForm.phone.trim(),
-        role: staffForm.role,
-        active: true,
-      },
-    ]);
-    setStaffForm({ name: '', phone: '', role: 'ขายหน้าร้าน' });
+    try {
+      const response = await axios.post<StaffMember>(`${API_BASE_URL}/api/staff`, staffForm);
+      setStaffMembers((previous) => [...previous, response.data]);
+      setStaffForm({ name: '', phone: '', role: 'ขายหน้าร้าน' });
+    } catch {
+      setApiStatus('เพิ่มพนักงานลง tingkum_db ไม่สำเร็จ');
+    }
   }
 
-  function toggleStaffStatus(id: string) {
-    setStaffMembers((previous) =>
-      previous.map((staff) => staff.id === id ? { ...staff, active: !staff.active } : staff),
-    );
+  async function toggleStaffStatus(id: string) {
+    if (!isOwner) {
+      return;
+    }
+
+    const staff = staffMembers.find((item) => item.id === id);
+    if (!staff) {
+      return;
+    }
+
+    try {
+      const response = await axios.patch<StaffMember>(`${API_BASE_URL}/api/staff/${encodeURIComponent(id)}`, {
+        active: !staff.active,
+        reason: 'toggle staff active',
+      });
+      setStaffMembers((previous) => previous.map((item) => item.id === id ? response.data : item));
+    } catch {
+      setApiStatus('เปลี่ยนสถานะพนักงานไม่สำเร็จ');
+    }
+  }
+
+  async function addUser() {
+    if (!isOwner) {
+      return;
+    }
+
+    if (!userForm.username.trim() || !userForm.displayName.trim() || userForm.password.length < 6) {
+      setApiStatus('กรอก username, ชื่อผู้ใช้ และ password อย่างน้อย 6 ตัว');
+      return;
+    }
+
+    try {
+      await axios.post<AuthUser>(`${API_BASE_URL}/api/users`, userForm);
+      await refreshUsers();
+      setUserForm({ username: '', displayName: '', password: '', role: 'user' });
+      setApiStatus('เพิ่ม user แล้ว');
+    } catch {
+      setApiStatus('เพิ่ม user ไม่สำเร็จ');
+    }
+  }
+
+  async function toggleUserStatus(user: AuthUser) {
+    if (!isOwner || user.id === currentUser?.id) {
+      return;
+    }
+
+    try {
+      await axios.patch<AuthUser>(`${API_BASE_URL}/api/users/${user.id}`, {
+        active: !user.active,
+        reason: 'toggle user active',
+      });
+      await refreshUsers();
+    } catch {
+      setApiStatus('เปลี่ยนสถานะ user ไม่สำเร็จ');
+    }
+  }
+
+  async function resetUserPassword(user: AuthUser) {
+    if (!isOwner) {
+      return;
+    }
+
+    const password = window.prompt(`ตั้งรหัสผ่านใหม่ให้ ${user.username}`)?.trim();
+    if (!password || password.length < 6) {
+      return;
+    }
+
+    try {
+      await axios.patch<AuthUser>(`${API_BASE_URL}/api/users/${user.id}`, {
+        password,
+        reason: 'reset user password',
+      });
+      await refreshUsers();
+      setApiStatus(`เปลี่ยนรหัสผ่าน ${user.username} แล้ว`);
+    } catch {
+      setApiStatus('เปลี่ยนรหัสผ่าน user ไม่สำเร็จ');
+    }
   }
 
   async function downloadSaleRecordPdf(sale: SaleRecord) {
@@ -2267,13 +3211,14 @@ export default function App() {
       ['จำนวนชิ้นที่ขาย', analyticsItemCount],
       ['ส่วนลดรวม', analyticsDiscountTotal],
       ['บิลสำเร็จ', analyticsSuccessfulCount],
+      ['บิลยกเลิก', analyticsCancelledCount],
       ['บิลค้าง/กำลังดำเนินการ', analyticsPendingCount],
       ['สินค้าใกล้หมด', lowStockCount],
       ['มูลค่าสต็อกประมาณ', stockValue],
       ['มูลค่าหวยคงเหลือ', possibleLotteryRevenue],
       [],
       ['ช่องทาง', 'จำนวนบิล', 'ยอดขาย'],
-      ...(['POS', 'GAS', 'LOTTERY'] as SaleChannel[]).map((channel) => [
+      ...saleChannels.map((channel) => [
         saleChannelMeta[channel].label,
         analyticsChannelTotals[channel].count,
         analyticsChannelTotals[channel].total,
@@ -2441,6 +3386,11 @@ export default function App() {
                   placeholder="0812345678"
                 />
                 <button type="button" onClick={lookupMember}><Icon name="person_search" /> ค้นหา</button>
+                {isOwner && (
+                  <button type="button" onClick={() => void createMemberFromPhone()}>
+                    <Icon name="person_add" /> สร้าง
+                  </button>
+                )}
               </div>
             </label>
           </div>
@@ -2560,7 +3510,7 @@ export default function App() {
 
               <div className="unknown-product-actions">
                 <button className="secondary-action" type="button" onClick={cancelUnknownProduct}>ยกเลิก</button>
-                <button className="primary-action" type="button" onClick={registerNewProductFromScan}>
+                <button className="primary-action" type="button" disabled={!isOwner} onClick={registerNewProductFromScan}>
                   <Icon name="inventory" /> ลงทะเบียนสินค้าใหม่
                 </button>
               </div>
@@ -2866,11 +3816,11 @@ export default function App() {
                 <strong>{gasReturnedCount} / {gasSelectedCount}</strong>
               </div>
               <div className="stepper large">
-                <button type="button" onClick={() => updateGasReturnedTankQuantity(-1)} disabled={gasReturnedCount <= 0}>
+                <button type="button" onClick={() => updateGasReturnedTankQuantity(-1)} disabled={!isOwner || gasReturnedCount <= 0}>
                   <Icon name="remove" />
                 </button>
                 <span>{gasReturnedCount}</span>
-                <button type="button" onClick={() => updateGasReturnedTankQuantity(1)} disabled={gasReturnedCount >= gasSelectedCount}>
+                <button type="button" onClick={() => updateGasReturnedTankQuantity(1)} disabled={!isOwner || gasReturnedCount >= gasSelectedCount}>
                   <Icon name="add" />
                 </button>
               </div>
@@ -2879,7 +3829,7 @@ export default function App() {
 
             <label className={`gas-status-toggle ${gasPaid ? 'active' : ''}`}>
               <span><Icon name="payments" /> จ่ายแล้ว</span>
-              <input type="checkbox" checked={gasPaid} onChange={(event) => setGasPaid(event.target.checked)} />
+              <input type="checkbox" checked={gasPaid} disabled={!isOwner} onChange={(event) => setGasPaid(event.target.checked)} />
               <i></i>
             </label>
           </div>
@@ -2913,7 +3863,10 @@ export default function App() {
                       <strong>{job.customerName}</strong>
                       <small>{job.createdAt} | {job.driver} | {formatMoney(job.total)}</small>
                     </div>
-                    <button type="button" onClick={() => completeGasJob(job.id)}>ปิดงาน</button>
+                    <div className="row-actions">
+                      <button type="button" disabled={!isOwner} onClick={() => completeGasJob(job.id)}>ปิดงาน</button>
+                      <button className="link-button danger" type="button" disabled={!isOwner} onClick={() => cancelGasJob(job.id)}>ยกเลิก</button>
+                    </div>
                   </div>
                 ))}
 
@@ -2926,11 +3879,11 @@ export default function App() {
                     </div>
                     <div className="gas-return-action">
                       <div className="stepper">
-                        <button type="button" onClick={() => updatePendingReturnQuantity(item, -1)}><Icon name="remove" /></button>
+                        <button type="button" disabled={!isOwner} onClick={() => updatePendingReturnQuantity(item, -1)}><Icon name="remove" /></button>
                         <span>{pendingReturnQuantityFor(item)}</span>
-                        <button type="button" onClick={() => updatePendingReturnQuantity(item, 1)}><Icon name="add" /></button>
+                        <button type="button" disabled={!isOwner} onClick={() => updatePendingReturnQuantity(item, 1)}><Icon name="add" /></button>
                       </div>
-                      <button type="button" onClick={() => completeGasReturn(item.id, pendingReturnQuantityFor(item))}>รับคืน</button>
+                      <button type="button" disabled={!isOwner} onClick={() => completeGasReturn(item.id, pendingReturnQuantityFor(item))}>รับคืน</button>
                     </div>
                   </div>
                 ))}
@@ -3147,6 +4100,7 @@ export default function App() {
                         <button
                           type="button"
                           className={`topup-switch ${order.toppedUp ? 'active' : ''}`}
+                          disabled={!isOwner || order.status === 'CANCELLED'}
                           onClick={() => toggleTopupOrderStatus(order.id, 'toppedUp')}
                         >
                           <Icon name={order.toppedUp ? 'check_circle' : 'radio_button_unchecked'} />
@@ -3157,6 +4111,7 @@ export default function App() {
                         <button
                           type="button"
                           className={`topup-switch ${order.paid ? 'active' : ''}`}
+                          disabled={!isOwner || order.status === 'CANCELLED'}
                           onClick={() => toggleTopupOrderStatus(order.id, 'paid')}
                         >
                           <Icon name={order.paid ? 'payments' : 'pending'} />
@@ -3164,8 +4119,8 @@ export default function App() {
                         </button>
                       </td>
                       <td>
-                        <button className="link-button" type="button" onClick={() => removeTopupOrder(order.id)}>
-                          ลบ
+                        <button className="link-button" type="button" disabled={!isOwner || order.status === 'CANCELLED'} onClick={() => removeTopupOrder(order.id)}>
+                          {order.status === 'CANCELLED' ? 'ยกเลิกแล้ว' : 'ยกเลิก'}
                         </button>
                       </td>
                     </tr>
@@ -3185,6 +4140,7 @@ export default function App() {
       { value: 'POS', label: 'POS', icon: saleChannelMeta.POS.icon },
       { value: 'GAS', label: 'แก๊ส', icon: saleChannelMeta.GAS.icon },
       { value: 'LOTTERY', label: 'หวย', icon: saleChannelMeta.LOTTERY.icon },
+      { value: 'TOPUP', label: 'Topup', icon: saleChannelMeta.TOPUP.icon },
     ];
 
     return (
@@ -3333,6 +4289,14 @@ export default function App() {
                 <Icon name={isPrintingReceipt ? 'hourglass_top' : 'picture_as_pdf'} />
                 {isPrintingReceipt ? 'กำลังสร้าง PDF...' : 'ดาวน์โหลดใบเสร็จ PDF'}
               </button>
+              <button
+                className="secondary-action danger"
+                type="button"
+                onClick={() => cancelSaleRecord(selectedSale)}
+                disabled={!isOwner || isCancelledStatus(selectedSale.status)}
+              >
+                <Icon name="cancel" /> {isCancelledStatus(selectedSale.status) ? 'ยกเลิกแล้ว' : 'ยกเลิกรายการ'}
+              </button>
             </>
           ) : (
             <EmptyState text="ยังไม่มีประวัติการขาย" />
@@ -3397,7 +4361,7 @@ export default function App() {
           <div className="metric-card success">
             <span>บิลสำเร็จ</span>
             <strong>{analyticsSuccessfulCount}</strong>
-            <small>ค้าง/กำลังดำเนินการ {analyticsPendingCount} บิล</small>
+            <small>ค้าง {analyticsPendingCount} | ยกเลิก {analyticsCancelledCount}</small>
           </div>
           <div className="metric-card blue">
             <span>ยอดเฉลี่ยต่อบิล</span>
@@ -3417,7 +4381,7 @@ export default function App() {
         </div>
 
         <section className="analytics-channel-grid">
-          {(['POS', 'GAS', 'LOTTERY'] as SaleChannel[]).map((channel) => {
+          {saleChannels.map((channel) => {
             const summary = analyticsChannelTotals[channel];
             return (
               <div className="analytics-channel-card" key={channel}>
@@ -3550,7 +4514,7 @@ export default function App() {
                       <td>{sale.staffName}</td>
                       <td>{sale.items.reduce((sum, item) => sum + item.quantity, 0)}</td>
                       <td>
-                        <span className={`badge ${sale.status === 'สำเร็จ' || sale.status === 'เสร็จแล้ว' ? 'success' : 'warning'}`}>
+                        <span className={`badge ${isCancelledStatus(sale.status) ? 'danger' : isCompletedStatus(sale.status) ? 'success' : 'warning'}`}>
                           {sale.status}
                         </span>
                       </td>
@@ -3593,6 +4557,77 @@ export default function App() {
             })}
           </div>
 
+          <div className="stock-inline-section">
+            <PanelTitle icon="add_box" title="เพิ่มสินค้าใหม่" detail="สร้างสินค้า POS ลงฐานข้อมูลและบันทึก stock เริ่มต้น" />
+            <div className="new-product-grid stock-product-form">
+              <label className="field">
+                <span>บาร์โค้ด</span>
+                <input
+                  value={stockProductDraft.barcode}
+                  onChange={(event) => setStockProductDraft({ ...stockProductDraft, barcode: event.target.value.trim() })}
+                  onKeyDown={(event) => event.key === 'Enter' && createStockProduct()}
+                  placeholder="เช่น 8850001"
+                />
+              </label>
+              <label className="field">
+                <span>ชื่อสินค้า</span>
+                <input
+                  value={stockProductDraft.name}
+                  onChange={(event) => setStockProductDraft({ ...stockProductDraft, name: event.target.value })}
+                  onKeyDown={(event) => event.key === 'Enter' && createStockProduct()}
+                  placeholder="เช่น น้ำดื่ม"
+                />
+              </label>
+              <label className="field">
+                <span>ราคาขาย</span>
+                <input
+                  type="number"
+                  min="0"
+                  value={stockProductDraft.price}
+                  onChange={(event) => setStockProductDraft({ ...stockProductDraft, price: event.target.value })}
+                  onKeyDown={(event) => event.key === 'Enter' && createStockProduct()}
+                />
+              </label>
+              <label className="field">
+                <span>จำนวนเริ่มต้น</span>
+                <input
+                  type="number"
+                  min="0"
+                  step="1"
+                  value={stockProductDraft.stock}
+                  onChange={(event) => setStockProductDraft({ ...stockProductDraft, stock: event.target.value })}
+                />
+              </label>
+              <label className="field">
+                <span>หมวดหมู่</span>
+                <input
+                  value={stockProductDraft.category}
+                  onChange={(event) => setStockProductDraft({ ...stockProductDraft, category: event.target.value })}
+                />
+              </label>
+              <label className="field">
+                <span>ขั้นต่ำ</span>
+                <input
+                  type="number"
+                  min="0"
+                  step="1"
+                  value={stockProductDraft.minStock}
+                  onChange={(event) => setStockProductDraft({ ...stockProductDraft, minStock: event.target.value })}
+                />
+              </label>
+              <label className="field">
+                <span>หน่วย</span>
+                <input
+                  value={stockProductDraft.unit}
+                  onChange={(event) => setStockProductDraft({ ...stockProductDraft, unit: event.target.value })}
+                />
+              </label>
+              <button className="primary-action" type="button" disabled={!isOwner} onClick={createStockProduct}>
+                <Icon name="add" /> เพิ่มสินค้า
+              </button>
+            </div>
+          </div>
+
           <PanelTitle icon="inventory_2" title="รายการสินค้า" detail={`${filteredStockItems.length} รายการในหมวด ${selectedStockCategory}`} />
           <div className="table-wrap stock-table">
             <table>
@@ -3603,6 +4638,7 @@ export default function App() {
                   <th>คงเหลือ</th>
                   <th>ขั้นต่ำ</th>
                   <th>สถานะ</th>
+                  <th></th>
                 </tr>
               </thead>
               <tbody>
@@ -3619,6 +4655,11 @@ export default function App() {
                       <span className={`badge ${item.stock <= item.minStock ? 'warning' : 'success'}`}>
                         {item.stock <= item.minStock ? 'ใกล้หมด' : 'ปกติ'}
                       </span>
+                    </td>
+                    <td>
+                      <button className="link-button danger" type="button" disabled={!isOwner} onClick={() => deleteStockProduct(item)}>
+                        ลบ
+                      </button>
                     </td>
                   </tr>
                 ))}
@@ -3648,7 +4689,134 @@ export default function App() {
               <Icon name="save" /> บันทึกการปรับ
             </button>
           </div>
+
+          <div className="stock-inline-section">
+            <PanelTitle icon="propane_tank" title="ปรับ stock แก๊ส" detail="เพิ่มหรือลดยอดถังจากการนับผิดหรือรับของเข้า" />
+            <div className="form-stack">
+              <label className="field">
+                <span>ถังแก๊ส</span>
+                <select value={selectedGasCorrectionItemId} onChange={(event) => setGasCorrectionItemId(event.target.value)}>
+                  {gasItems.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
+                </select>
+              </label>
+              <label className="field">
+                <span>เพิ่ม/ลดจำนวน</span>
+                <input type="number" value={gasCorrectionDelta} onChange={(event) => setGasCorrectionDelta(event.target.value)} />
+              </label>
+              <label className="field">
+                <span>เหตุผล</span>
+                <textarea value={gasCorrectionReason} onChange={(event) => setGasCorrectionReason(event.target.value)} placeholder="เช่น รับถังเพิ่ม / นับถังผิด / ถังเสีย" />
+              </label>
+              <button className="primary-action" type="button" onClick={applyGasStockCorrection}>
+                <Icon name="save" /> บันทึก stock แก๊ส
+              </button>
+            </div>
+          </div>
         </aside>
+
+        <section className="panel wide-panel gas-stock-panel">
+          <PanelTitle icon="propane_tank" title="Stock แก๊ส" detail={`${gasItems.length} รายการจาก tingkum_db`} />
+          <div className="new-product-grid gas-stock-form">
+            <label className="field">
+              <span>รหัสถัง</span>
+              <input
+                value={gasItemDraft.id}
+                onChange={(event) => setGasItemDraft({ ...gasItemDraft, id: event.target.value.toUpperCase().replace(/\s/g, '-') })}
+                onKeyDown={(event) => event.key === 'Enter' && createGasStockItem()}
+                placeholder="เช่น GAS-450"
+              />
+            </label>
+            <label className="field">
+              <span>ชื่อถัง</span>
+              <input
+                value={gasItemDraft.name}
+                onChange={(event) => setGasItemDraft({ ...gasItemDraft, name: event.target.value })}
+                onKeyDown={(event) => event.key === 'Enter' && createGasStockItem()}
+                placeholder="เช่น ถังแก๊ส 450"
+              />
+            </label>
+            <label className="field">
+              <span>ประเภท/ขนาด</span>
+              <input
+                value={gasItemDraft.operation}
+                onChange={(event) => setGasItemDraft({ ...gasItemDraft, operation: event.target.value })}
+                placeholder="เช่น ขายแก๊ส / 450"
+              />
+            </label>
+            <label className="field">
+              <span>ราคา</span>
+              <input
+                type="number"
+                min="0"
+                value={gasItemDraft.price}
+                onChange={(event) => setGasItemDraft({ ...gasItemDraft, price: event.target.value })}
+              />
+            </label>
+            <label className="field">
+              <span>จำนวนเริ่มต้น</span>
+              <input
+                type="number"
+                min="0"
+                step="1"
+                value={gasItemDraft.stock}
+                onChange={(event) => setGasItemDraft({ ...gasItemDraft, stock: event.target.value })}
+              />
+            </label>
+            <label className="field">
+              <span>รูปถัง</span>
+              <input
+                value={gasItemDraft.imageUrl}
+                onChange={(event) => setGasItemDraft({ ...gasItemDraft, imageUrl: event.target.value })}
+                placeholder="https://..."
+              />
+            </label>
+            <button className="primary-action" type="button" disabled={!isOwner} onClick={createGasStockItem}>
+              <Icon name="add" /> เพิ่มแก๊ส
+            </button>
+          </div>
+
+          <div className="table-wrap gas-stock-table">
+            {gasItems.length === 0 ? (
+              <EmptyState text="ยังไม่มี stock แก๊ส" />
+            ) : (
+              <table>
+                <thead>
+                  <tr>
+                    <th>ถังแก๊ส</th>
+                    <th>ประเภท</th>
+                    <th>ราคา</th>
+                    <th>คงเหลือ</th>
+                    <th>สถานะ</th>
+                    <th></th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {gasItems.map((item) => (
+                    <tr key={item.id}>
+                      <td>
+                        <strong>{item.name}</strong>
+                        <small>{item.id}</small>
+                      </td>
+                      <td>{item.operation}</td>
+                      <td>{formatMoney(item.price)}</td>
+                      <td>{item.stock} ถัง</td>
+                      <td>
+                        <span className={`badge ${item.stock > 0 ? 'success' : 'warning'}`}>
+                          {item.stock > 0 ? 'พร้อมขาย' : 'หมด'}
+                        </span>
+                      </td>
+                      <td>
+                        <button className="link-button danger" type="button" disabled={!isOwner} onClick={() => deleteGasStockItem(item)}>
+                          ลบ
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+          </div>
+        </section>
 
         <section className="panel wide-panel">
           <div className="stock-log-header">
@@ -3671,7 +4839,7 @@ export default function App() {
                 <strong>{log.productName}</strong>
                 <span className={log.delta > 0 ? 'text-success' : 'text-danger'}>{log.delta > 0 ? '+' : ''}{log.delta}</span>
                 <span>{log.reason}</span>
-                <small>{log.staffName} | {log.createdAt}</small>
+                <small>{log.staffName} | {formatReceiptDateTime(new Date(log.createdAt))}</small>
               </div>
             ))}
           </div>
@@ -3809,7 +4977,387 @@ export default function App() {
             </button>
           </div>
         </aside>
+
+        <section className="panel wide-panel">
+          <PanelTitle icon="manage_accounts" title="User Login" detail={`${users.length} users`} />
+          <div className="user-admin-grid">
+            <div className="form-stack">
+              <label className="field">
+                <span>Username</span>
+                <input value={userForm.username} onChange={(event) => setUserForm({ ...userForm, username: event.target.value })} />
+              </label>
+              <label className="field">
+                <span>ชื่อแสดงผล</span>
+                <input value={userForm.displayName} onChange={(event) => setUserForm({ ...userForm, displayName: event.target.value })} />
+              </label>
+              <label className="field">
+                <span>Password</span>
+                <input type="password" value={userForm.password} onChange={(event) => setUserForm({ ...userForm, password: event.target.value })} />
+              </label>
+              <label className="field">
+                <span>Role</span>
+                <select value={userForm.role} onChange={(event) => setUserForm({ ...userForm, role: event.target.value as AppRole })}>
+                  <option value="user">user</option>
+                  <option value="owner">owner</option>
+                </select>
+              </label>
+              <button className="primary-action" type="button" onClick={() => void addUser()}>
+                <Icon name="person_add" /> เพิ่ม user
+              </button>
+            </div>
+
+            <div className="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Username</th>
+                    <th>ชื่อ</th>
+                    <th>Role</th>
+                    <th>สถานะ</th>
+                    <th></th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {users.map((user) => (
+                    <tr key={user.id}>
+                      <td><strong>{user.username}</strong></td>
+                      <td>{user.displayName}</td>
+                      <td>{user.role}</td>
+                      <td>{user.active ? 'ใช้งาน' : 'ปิด'}</td>
+                      <td>
+                        <div className="row-actions">
+                          <button className="link-button" type="button" onClick={() => resetUserPassword(user)}>ตั้งรหัส</button>
+                          <button className="link-button danger" type="button" disabled={user.id === currentUser?.id} onClick={() => toggleUserStatus(user)}>
+                            {user.active ? 'ปิด' : 'เปิด'}
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </section>
       </div>
+    );
+  }
+
+  function closingCheckFor(section: ClosingSection) {
+    return closingSummary?.checks.find((check) => check.section === section) ?? {
+      section,
+      confirmed: false,
+      confirmedAt: null,
+      confirmedBy: '',
+      note: '',
+    };
+  }
+
+  function closingStatusText(status = shopStatus) {
+    if (status === 'OPEN' || status === 'ACTIVE') {
+      return 'เปิดร้าน';
+    }
+    if (status === 'CLOSED') {
+      return 'ปิดร้านแล้ว';
+    }
+    return 'รอเปิดร้าน';
+  }
+
+  function gasBalanceText(row: ClosingSummary['sections']['gas']['tankBalance'][number]) {
+    if (row.status === 'BALANCED') {
+      return 'ยอดเท่าเดิม';
+    }
+    if (row.status === 'PENDING_RETURN') {
+      return `ยังไม่คืน ${row.pendingQuantity} ถัง`;
+    }
+    return `ควรตรวจข้อมูล ${Math.abs(row.expectedMissing - row.pendingQuantity)} ถัง`;
+  }
+
+  function renderClosingConfirm(section: ClosingSection) {
+    const check = closingCheckFor(section);
+    return (
+      <button
+        className={check.confirmed ? 'status-button active' : 'status-button'}
+        type="button"
+        disabled={!isOwner || !isShopOpen || isClosingLoading}
+        onClick={() => confirmClosingSection(section)}
+      >
+        <Icon name={check.confirmed ? 'check_circle' : 'radio_button_unchecked'} />
+        {check.confirmed ? 'เช็คยอดแล้ว' : 'ยืนยันยอด'}
+      </button>
+    );
+  }
+
+  function renderPreviousClosingSummary() {
+    if (!previousClosingSummary) {
+      return null;
+    }
+
+    const total = previousClosingSummary.sections.pos.total
+      + previousClosingSummary.sections.gas.total
+      + previousClosingSummary.sections.lottery.total
+      + previousClosingSummary.sections.topup.total;
+
+    return (
+      <section className="panel closing-previous-panel">
+        <PanelTitle
+          icon="event_repeat"
+          title="สรุปรอบก่อนหน้า"
+          detail={`${previousClosingSummary.session.business_date} | ${closingStatusText(previousClosingSummary.session.status)}`}
+        />
+        <div className="closing-metric-grid">
+          <div><span>ยอดรวม</span><strong>{formatMoney(total)}</strong></div>
+          <div><span>POS</span><strong>{formatMoney(previousClosingSummary.sections.pos.total)}</strong></div>
+          <div><span>แก๊ส</span><strong>{formatMoney(previousClosingSummary.sections.gas.total)}</strong></div>
+          <div><span>เติมเงิน</span><strong>{formatMoney(previousClosingSummary.sections.topup.total)}</strong></div>
+        </div>
+      </section>
+    );
+  }
+
+  function renderClosingPage() {
+    const confirmedCount = closingSummary?.checks.filter((check) => check.confirmed).length ?? 0;
+    const canCloseShop = Boolean(closingSummary?.readyToClose && isOwner && isShopOpen);
+
+    return (
+      <div className="closing-page">
+        <section className="panel closing-hero-panel">
+          <div>
+            <span className={`badge ${shopStatus === 'CLOSED' ? 'danger' : isShopOpen ? 'success' : 'warning'}`}>
+              {closingStatusText()}
+            </span>
+            <h2>{appSession?.business_date ?? currentDateInput()}</h2>
+            <p>{closingNotice}</p>
+          </div>
+          <div className="closing-actions">
+            <button className="secondary-action" type="button" disabled={!isOwner || isClosingLoading} onClick={() => refreshClosingSummary()}>
+              <Icon name="refresh" /> รีเฟรช
+            </button>
+            {!isShopOpen && shopStatus !== 'CLOSED' && (
+              <button className="primary-action" type="button" disabled={!isOwner || isClosingLoading} onClick={openShop}>
+                <Icon name="storefront" /> เปิดร้านวันนี้
+              </button>
+            )}
+            {isShopOpen && (
+              <button className="primary-action" type="button" disabled={!canCloseShop || isClosingLoading} onClick={closeShop}>
+                <Icon name="lock" /> ปิดร้าน
+              </button>
+            )}
+            {shopStatus === 'CLOSED' && (
+              <button className="primary-action" type="button" disabled={!isOwner || isClosingLoading} onClick={reopenShop}>
+                <Icon name="lock_open" /> Reopen วันนี้
+              </button>
+            )}
+          </div>
+          <div className="closing-progress">
+            <strong>{confirmedCount}/{closingSections.length}</strong>
+            <span>หมวดที่เช็คยอดแล้ว</span>
+          </div>
+        </section>
+
+        {!isShopOpen && renderPreviousClosingSummary()}
+
+        {!isOwner ? (
+          <section className="panel wide-panel">
+            <EmptyState text="การเปิดร้านและปิดร้านต้องใช้สิทธิ์ owner" />
+          </section>
+        ) : !closingSummary ? (
+          <section className="panel wide-panel">
+            <EmptyState text={isClosingLoading ? 'กำลังโหลดสรุปปิดร้าน' : 'ยังไม่มีสรุปปิดร้าน'} />
+          </section>
+        ) : (
+          <>
+            <section className="panel closing-section">
+              <div className="closing-section-head">
+                <PanelTitle icon={closingSectionMeta.POS.icon} title={closingSectionMeta.POS.label} detail={`${closingSummary.sections.pos.billCount} บิล | ${closingSummary.sections.pos.itemCount} ชิ้น`} />
+                {renderClosingConfirm('POS')}
+              </div>
+              <div className="closing-metric-grid">
+                <div><span>ยอดขาย POS</span><strong>{formatMoney(closingSummary.sections.pos.total)}</strong></div>
+                <div><span>ก่อนส่วนลด</span><strong>{formatMoney(closingSummary.sections.pos.subtotal)}</strong></div>
+                <div><span>ส่วนลด</span><strong>{formatMoney(closingSummary.sections.pos.discount)}</strong></div>
+              </div>
+              <div className="table-wrap closing-table">
+                {closingSummary.sections.pos.items.length === 0 ? (
+                  <EmptyState text="ยังไม่มีรายการ POS วันนี้" />
+                ) : (
+                  <table>
+                    <thead><tr><th>สินค้า</th><th>บาร์โค้ด</th><th>จำนวน</th><th>ยอด</th></tr></thead>
+                    <tbody>
+                      {closingSummary.sections.pos.items.map((item) => (
+                        <tr key={`${item.barcode}-${item.name}`}>
+                          <td><strong>{item.name}</strong></td>
+                          <td>{item.barcode || '-'}</td>
+                          <td>{item.quantity}</td>
+                          <td>{formatMoney(item.total)}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                )}
+              </div>
+            </section>
+
+            <section className="panel closing-section">
+              <div className="closing-section-head">
+                <PanelTitle icon={closingSectionMeta.GAS.icon} title={closingSectionMeta.GAS.label} detail={`${closingSummary.sections.gas.jobCount} งาน | ค้างคืน ${closingSummary.sections.gas.pendingReturnQuantity} ถัง`} />
+                {renderClosingConfirm('GAS')}
+              </div>
+              <div className="closing-metric-grid">
+                <div><span>ยอดแก๊ส</span><strong>{formatMoney(closingSummary.sections.gas.total)}</strong></div>
+                <div><span>ขายถัง</span><strong>{closingSummary.sections.gas.soldQuantity}</strong></div>
+                <div><span>คืนถัง</span><strong>{closingSummary.sections.gas.returnedQuantity}</strong></div>
+                <div><span>ค่าส่ง</span><strong>{formatMoney(closingSummary.sections.gas.deliveryFeeTotal)}</strong></div>
+              </div>
+              <div className="table-wrap closing-table">
+                {closingSummary.sections.gas.tankBalance.length === 0 ? (
+                  <EmptyState text="ยังไม่มีรายการแก๊สให้ตรวจ" />
+                ) : (
+                  <table>
+                    <thead><tr><th>ถัง</th><th>เปิดวัน</th><th>ขาย</th><th>คืน</th><th>คงเหลือระบบ</th><th>สถานะ</th></tr></thead>
+                    <tbody>
+                      {closingSummary.sections.gas.tankBalance.map((item) => (
+                        <tr key={item.id}>
+                          <td><strong>{item.name}</strong><small>{item.operation}</small></td>
+                          <td>{item.openingStock}</td>
+                          <td>{item.soldQuantity}</td>
+                          <td>{item.returnedQuantity}</td>
+                          <td>{item.currentStock}</td>
+                          <td>
+                            <span className={`badge ${item.status === 'BALANCED' ? 'success' : item.status === 'PENDING_RETURN' ? 'warning' : 'danger'}`}>
+                              {gasBalanceText(item)}
+                            </span>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                )}
+              </div>
+            </section>
+
+            <section className="panel closing-section">
+              <div className="closing-section-head">
+                <PanelTitle icon={closingSectionMeta.LOTTERY.icon} title={closingSectionMeta.LOTTERY.label} detail={`${closingSummary.sections.lottery.billCount} บิล | ${closingSummary.sections.lottery.ticketCount} ใบ`} />
+                {renderClosingConfirm('LOTTERY')}
+              </div>
+              <div className="closing-metric-grid">
+                <div><span>ยอดหวย</span><strong>{formatMoney(closingSummary.sections.lottery.total)}</strong></div>
+              </div>
+              <div className="log-table compact-log">
+                {closingSummary.sections.lottery.items.length === 0 ? <EmptyState text="ยังไม่มีรายการหวยวันนี้" /> : closingSummary.sections.lottery.items.slice(0, 12).map((item) => (
+                  <div key={item.number}>
+                    <strong>{item.number}</strong>
+                    <span>{item.quantity} ใบ</span>
+                    <span>{formatMoney(item.total)}</span>
+                    <small>Lottery</small>
+                  </div>
+                ))}
+              </div>
+            </section>
+
+            <section className="panel closing-section">
+              <div className="closing-section-head">
+                <PanelTitle icon={closingSectionMeta.TOPUP.icon} title={closingSectionMeta.TOPUP.label} detail={`${closingSummary.sections.topup.orderCount} รายการ`} />
+                {renderClosingConfirm('TOPUP')}
+              </div>
+              <div className="closing-metric-grid">
+                <div><span>ยอดเติมเงิน</span><strong>{formatMoney(closingSummary.sections.topup.total)}</strong></div>
+              </div>
+              <div className="table-wrap closing-table">
+                {closingSummary.sections.topup.providers.length === 0 ? (
+                  <EmptyState text="ยังไม่มีรายการเติมเงินวันนี้" />
+                ) : (
+                  <table>
+                    <thead><tr><th>ค่าย</th><th>รายการ</th><th>เติมแล้ว</th><th>จ่ายแล้ว</th><th>ยอดรวม</th></tr></thead>
+                    <tbody>
+                      {closingSummary.sections.topup.providers.map((item) => (
+                        <tr key={item.provider}>
+                          <td><strong>{item.provider}</strong></td>
+                          <td>{item.orderCount}</td>
+                          <td>{item.toppedUpCount}</td>
+                          <td>{item.paidCount} | {formatMoney(item.paidTotal)}</td>
+                          <td>{formatMoney(item.total)}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                )}
+              </div>
+            </section>
+
+            <section className="panel closing-section wide-panel">
+              <div className="closing-section-head">
+                <PanelTitle icon={closingSectionMeta.STOCK.icon} title={closingSectionMeta.STOCK.label} detail={`${closingSummary.sections.stock.movementCount} movement | ใกล้หมด ${closingSummary.sections.stock.lowProducts.length}`} />
+                {renderClosingConfirm('STOCK')}
+              </div>
+              <div className="closing-stock-grid">
+                <div className="log-table compact-log">
+                  {closingSummary.sections.stock.movements.length === 0 ? <EmptyState text="วันนี้ยังไม่มี movement stock" /> : closingSummary.sections.stock.movements.slice(0, 18).map((item) => (
+                    <div key={`${item.itemType}-${item.itemName}`}>
+                      <strong>{item.itemName}</strong>
+                      <span className={item.netDelta >= 0 ? 'text-success' : 'text-danger'}>{item.netDelta >= 0 ? '+' : ''}{item.netDelta}</span>
+                      <span>{item.movementCount} ครั้ง</span>
+                      <small>{item.itemType}</small>
+                    </div>
+                  ))}
+                </div>
+                <div className="risk-list">
+                  {closingSummary.sections.stock.lowProducts.length === 0 ? <EmptyState text="ไม่มีสินค้าใกล้หมด" /> : closingSummary.sections.stock.lowProducts.slice(0, 12).map((item) => {
+                    const product = normalizeProduct(item);
+                    return (
+                      <div key={product.id}>
+                        <strong>{product.name}</strong>
+                        <span>เหลือ {product.stock} {product.unit}</span>
+                        <small>ขั้นต่ำ {product.minStock}</small>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            </section>
+          </>
+        )}
+      </div>
+    );
+  }
+
+  function renderLoginPage() {
+    return (
+      <main className="login-shell">
+        <section className="login-panel">
+          <div>
+            <span className="badge accent">Tingkum POS</span>
+            <h1>Login</h1>
+            <p>{loginNotice}</p>
+          </div>
+
+          <label className="field">
+            <span>Username</span>
+            <input
+              value={loginForm.username}
+              onChange={(event) => setLoginForm({ ...loginForm, username: event.target.value })}
+              onKeyDown={(event) => event.key === 'Enter' && void handleLogin()}
+              autoFocus
+            />
+          </label>
+
+          <label className="field">
+            <span>Password</span>
+            <input
+              type="password"
+              value={loginForm.password}
+              onChange={(event) => setLoginForm({ ...loginForm, password: event.target.value })}
+              onKeyDown={(event) => event.key === 'Enter' && void handleLogin()}
+            />
+          </label>
+
+          <button className="primary-action" type="button" onClick={() => void handleLogin()}>
+            <Icon name="login" /> เข้าสู่ระบบ
+          </button>
+          <small>owner เริ่มต้น: username `owner`, password `owner1234` ถ้ายังไม่ได้ตั้งค่าใน Railway env</small>
+        </section>
+      </main>
     );
   }
 
@@ -3831,9 +5379,15 @@ export default function App() {
         return renderStockPage();
       case 'STAFF':
         return renderStaffPage();
+      case 'CLOSING':
+        return renderClosingPage();
       default:
         return renderPosPage();
     }
+  }
+
+  if (!authSession) {
+    return renderLoginPage();
   }
 
   return (
@@ -3845,7 +5399,7 @@ export default function App() {
         </div>
 
         <nav className="nav-list" aria-label="Main navigation">
-          {(Object.keys(viewMeta) as View[]).map((view) => (
+          {allowedViews.map((view) => (
             <button
               type="button"
               key={view}
@@ -3874,10 +5428,27 @@ export default function App() {
             <p>{viewMeta[currentView].subtitle}</p>
           </div>
           <div className="topbar-actions">
+            <span>{currentUser?.displayName} ({currentUser?.role})</span>
             <span>{scanSessionId}</span>
+            <span className={`shop-status-chip ${shopStatus === 'CLOSED' ? 'closed' : isShopOpen ? 'open' : 'pending'}`}>
+              {closingStatusText()}
+            </span>
+            {isOwner && (
+              <button
+                type="button"
+                className="topbar-close-button"
+                onClick={() => {
+                  setCurrentView('CLOSING');
+                  void refreshClosingSummary();
+                }}
+              >
+                <Icon name={isShopOpen ? 'lock_clock' : 'storefront'} />
+                {isShopOpen ? 'ปิดร้าน' : shopStatus === 'CLOSED' ? 'Reopen' : 'เปิดร้าน'}
+              </button>
+            )}
             <span>{todayLabel}</span>
             <button type="button"><Icon name="notifications" /></button>
-            <button type="button"><Icon name="account_circle" /></button>
+            <button type="button" onClick={() => void logout()}><Icon name="logout" /></button>
           </div>
         </header>
 
