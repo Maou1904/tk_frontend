@@ -337,6 +337,11 @@ const storageKeys = {
 } as const;
 
 function getApiBaseUrl() {
+  const configuredApiBaseUrl = import.meta.env.VITE_API_BASE_URL;
+  if (configuredApiBaseUrl) {
+    return configuredApiBaseUrl.replace(/\/$/, '');
+  }
+
   if (typeof window === 'undefined') {
     return 'http://localhost:5000';
   }
