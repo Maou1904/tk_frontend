@@ -4809,9 +4809,6 @@ export default function App() {
             <button type="button" className="danger" onClick={deleteTopupPhoneDigit}>
               Del
             </button>
-            <button type="button" className="confirm" onClick={confirmTopupOrder}>
-              Confirm
-            </button>
           </div>
 
           <div className="topup-amount-block">

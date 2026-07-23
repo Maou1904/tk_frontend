@@ -2173,12 +2173,6 @@ th:last-child {
   color: var(--color-danger);
 }
 
-.topup-keypad button.confirm {
-  border-color: var(--color-success);
-  background: var(--color-success-soft);
-  color: var(--color-success);
-}
-
 .topup-amount-block {
   display: grid;
   gap: 0.65rem;
