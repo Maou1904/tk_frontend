@@ -69,6 +69,19 @@ type BarcodeDetectorLike = {
 };
 
 type BarcodeDetectorConstructor = new (options?: { formats?: string[] }) => BarcodeDetectorLike;
+type CameraDeviceOption = {
+  deviceId: string;
+  label: string;
+  score: number;
+};
+type BarcodeTrackCapabilities = MediaTrackCapabilities & {
+  focusMode?: string[];
+  zoom?: { min?: number; max?: number; step?: number };
+};
+type BarcodeTrackConstraintSet = MediaTrackConstraintSet & {
+  focusMode?: string;
+  zoom?: number;
+};
 
 const BARCODE_DETECTOR_FORMATS = ['ean_13', 'ean_8', 'code_128', 'code_39', 'upc_a', 'upc_e', 'qr_code'];
 const ZXING_BARCODE_FORMATS = [
@@ -82,6 +95,7 @@ const ZXING_BARCODE_FORMATS = [
   BarcodeFormat.ITF,
   BarcodeFormat.QR_CODE,
 ];
+const BARCODE_CAMERA_ZOOM = 2;
 
 interface Product {
   id: number;
@@ -450,6 +464,10 @@ function getCameraErrorNotice(error: unknown) {
     if (error.name === 'NotReadableError' || error.name === 'TrackStartError') {
       return 'เปิดกล้องไม่ได้ เพราะกล้องถูกใช้งานอยู่หรือระบบไม่พร้อม';
     }
+
+    if (error.name === 'OverconstrainedError') {
+      return 'เปิดกล้องตัวที่เลือกไม่ได้ ลองกด Scan ใหม่เพื่อใช้กล้องหลัง default';
+    }
   }
 
   return 'เปิดกล้องไม่ได้ ตรวจ permission ของ browser';
@@ -465,6 +483,127 @@ function createZxingReader() {
     delayBetweenScanSuccess: 500,
     tryPlayVideoTimeout: 5000,
   });
+}
+
+function scoreCameraDevice(label: string, index: number) {
+  const normalizedLabel = label.toLowerCase();
+  let score = -index / 100;
+
+  if (/back|rear|environment|หลัง|ด้านหลัง/.test(normalizedLabel)) {
+    score += 80;
+  }
+
+  if (/front|user|facetime|หน้า|ด้านหน้า/.test(normalizedLabel)) {
+    score -= 120;
+  }
+
+  if (/ultra|0\.5|0,5|wide angle|wide-angle|fisheye|fish eye/.test(normalizedLabel)) {
+    score -= 70;
+  }
+
+  if (/main|standard|default|normal|back camera$|rear camera$/.test(normalizedLabel)) {
+    score += 25;
+  }
+
+  if (/macro/.test(normalizedLabel)) {
+    score += 15;
+  }
+
+  return score;
+}
+
+async function listPreferredCameraDevices() {
+  if (typeof navigator === 'undefined' || !navigator.mediaDevices?.enumerateDevices) {
+    return [];
+  }
+
+  const devices = await navigator.mediaDevices.enumerateDevices();
+  return devices
+    .filter((device) => device.kind === 'videoinput')
+    .map((device, index) => {
+      const label = device.label || `Camera ${index + 1}`;
+      return {
+        deviceId: device.deviceId,
+        label,
+        score: scoreCameraDevice(device.label, index),
+      };
+    })
+    .sort((first, second) => second.score - first.score);
+}
+
+function createCameraStreamConstraints(deviceId = ''): MediaStreamConstraints {
+  const video: MediaTrackConstraints = {
+    width: { ideal: 1280 },
+    height: { ideal: 720 },
+  };
+
+  if (deviceId) {
+    video.deviceId = { exact: deviceId };
+  } else {
+    video.facingMode = { ideal: 'environment' };
+  }
+
+  return { video, audio: false };
+}
+
+function getStreamCameraDeviceId(stream: MediaStream) {
+  return stream.getVideoTracks()[0]?.getSettings().deviceId ?? '';
+}
+
+function getCameraLabel(devices: CameraDeviceOption[], deviceId: string) {
+  return devices.find((device) => device.deviceId === deviceId)?.label || 'กล้องหลัง';
+}
+
+function getPreferredCameraSwitch(devices: CameraDeviceOption[], currentDeviceId: string, requestedDeviceId: string) {
+  if (requestedDeviceId || devices.length < 2) {
+    return null;
+  }
+
+  const preferredDevice = devices[0];
+  const currentDevice = devices.find((device) => device.deviceId === currentDeviceId);
+  if (!preferredDevice || preferredDevice.deviceId === currentDeviceId) {
+    return null;
+  }
+
+  if (!currentDevice && preferredDevice.score > 20) {
+    return preferredDevice;
+  }
+
+  if (currentDevice && preferredDevice.score >= currentDevice.score + 20) {
+    return preferredDevice;
+  }
+
+  return null;
+}
+
+async function tuneBarcodeCameraStream(stream: MediaStream) {
+  const track = stream.getVideoTracks()[0];
+  if (!track?.getCapabilities || !track.applyConstraints) {
+    return;
+  }
+
+  const capabilities = track.getCapabilities() as BarcodeTrackCapabilities;
+  const advanced: BarcodeTrackConstraintSet[] = [];
+
+  if (capabilities.focusMode?.includes('continuous')) {
+    advanced.push({ focusMode: 'continuous' });
+  }
+
+  const zoom = capabilities.zoom;
+  if (zoom && typeof zoom.min === 'number' && typeof zoom.max === 'number' && zoom.max > 1) {
+    const zoomTarget = Math.min(Math.max(BARCODE_CAMERA_ZOOM, zoom.min), zoom.max);
+    advanced.push({ zoom: zoomTarget });
+  }
+
+  if (advanced.length === 0) {
+    return;
+  }
+
+  try {
+    await track.applyConstraints({ advanced } as MediaTrackConstraints);
+  } catch {
+    // Some mobile browsers expose zoom/focus capabilities but reject applying them.
+  }
 }
 
 const API_BASE_URL = getApiBaseUrl();
@@ -989,6 +1128,8 @@ export default function App() {
   const scannerStreamRef = useRef<MediaStream | null>(null);
   const scannerFrameRef = useRef<number | null>(null);
   const scannerControlsRef = useRef<IScannerControls | null>(null);
+  const requestedCameraDeviceIdRef = useRef('');
+  const activeCameraDeviceIdRef = useRef('');
   const handledPrintRequestIdsRef = useRef<Set<number>>(new Set());
   const previousGasSelectedCountRef = useRef(0);
   const gasKeyboardScrollTopRef = useRef<number | null>(null);
@@ -1010,6 +1151,8 @@ export default function App() {
   const [scannerBarcode, setScannerBarcode] = useState('');
   const [scannerNotice, setScannerNotice] = useState('พร้อมส่งบาร์โค้ดเข้าหน้า POS');
   const [cameraActive, setCameraActive] = useState(false);
+  const [cameraDevices, setCameraDevices] = useState<CameraDeviceOption[]>([]);
+  const [activeCameraLabel, setActiveCameraLabel] = useState('');
   const [currentView, setCurrentView] = useState<View>('POS');
   const [apiStatus, setApiStatus] = useState('กำลังโหลดสินค้าใน tingkum_db');
   const [appSession, setAppSession] = useState<AppSessionResponse | null>(null);
@@ -2181,7 +2324,44 @@ export default function App() {
 
     if (updateState) {
       setCameraActive(false);
+      setActiveCameraLabel('');
+      activeCameraDeviceIdRef.current = '';
     }
+  }
+
+  async function refreshCameraDeviceState(stream: MediaStream) {
+    const devices = await listPreferredCameraDevices();
+    const currentDeviceId = getStreamCameraDeviceId(stream);
+    setCameraDevices(devices);
+
+    if (currentDeviceId) {
+      activeCameraDeviceIdRef.current = currentDeviceId;
+      setActiveCameraLabel(getCameraLabel(devices, currentDeviceId));
+    } else {
+      setActiveCameraLabel('');
+    }
+
+    return { devices, currentDeviceId };
+  }
+
+  async function switchMobileCamera() {
+    const devices = cameraDevices.length > 0 ? cameraDevices : await listPreferredCameraDevices();
+    if (devices.length <= 1) {
+      setScannerNotice('ไม่พบกล้องอื่นให้สลับ');
+      return;
+    }
+
+    setCameraDevices(devices);
+    const currentDeviceId = activeCameraDeviceIdRef.current || requestedCameraDeviceIdRef.current;
+    const currentIndex = devices.findIndex((device) => device.deviceId === currentDeviceId);
+    const nextDevice = devices[(currentIndex + 1 + devices.length) % devices.length];
+    requestedCameraDeviceIdRef.current = nextDevice.deviceId;
+
+    setScannerNotice(`กำลังสลับกล้องเป็น ${nextDevice.label}`);
+    stopCameraScanner();
+    window.setTimeout(() => {
+      void startCameraScanner(nextDevice.deviceId, false);
+    }, 0);
   }
 
   async function startZxingScanner(stream: MediaStream, video: HTMLVideoElement) {
@@ -2215,7 +2395,7 @@ export default function App() {
     setScannerNotice('เปิดกล้องแล้ว กำลังสแกนบาร์โค้ดด้วยตัวอ่านสำหรับมือถือ');
   }
 
-  async function startCameraScanner() {
+  async function startCameraScanner(requestedDeviceId = requestedCameraDeviceIdRef.current, allowPreferredSwitch = true) {
     const unavailableNotice = getCameraUnavailableNotice();
     if (unavailableNotice) {
       setScannerNotice(unavailableNotice);
@@ -2223,17 +2403,25 @@ export default function App() {
     }
 
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({
-        video: { facingMode: { ideal: 'environment' } },
-        audio: false,
-      });
-      scannerStreamRef.current = stream;
-      setCameraActive(true);
-
       const video = scannerVideoRef.current;
       if (!video) {
-        stopCameraScanner();
         setScannerNotice('เปิดกล้องไม่ได้ เพราะหน้าตัวอย่างกล้องยังไม่พร้อม ลองกด Scan ใหม่');
+        return;
+      }
+
+      const stream = await navigator.mediaDevices.getUserMedia(createCameraStreamConstraints(requestedDeviceId));
+      scannerStreamRef.current = stream;
+      await tuneBarcodeCameraStream(stream);
+      setCameraActive(true);
+
+      const cameraState = await refreshCameraDeviceState(stream);
+      const preferredSwitch = getPreferredCameraSwitch(cameraState.devices, cameraState.currentDeviceId, requestedDeviceId);
+      if (allowPreferredSwitch && preferredSwitch) {
+        requestedCameraDeviceIdRef.current = preferredSwitch.deviceId;
+        stream.getTracks().forEach((track) => track.stop());
+        scannerStreamRef.current = null;
+        setScannerNotice(`กำลังใช้กล้องหลังเลนส์หลัก: ${preferredSwitch.label}`);
+        await startCameraScanner(preferredSwitch.deviceId, false);
         return;
       }
 
@@ -2282,6 +2470,13 @@ export default function App() {
 
       scannerFrameRef.current = window.requestAnimationFrame(scanFrame);
     } catch (error) {
+      if (requestedDeviceId && error instanceof DOMException && (error.name === 'OverconstrainedError' || error.name === 'NotFoundError')) {
+        requestedCameraDeviceIdRef.current = '';
+        setScannerNotice('กล้องที่เลือกไว้ใช้ไม่ได้ กำลังลองเปิดกล้องหลัง default');
+        await startCameraScanner('', false);
+        return;
+      }
+
       stopCameraScanner();
       setScannerNotice(getCameraErrorNotice(error));
     }
@@ -3656,6 +3851,17 @@ export default function App() {
                 </div>
               )}
             </div>
+
+            {(activeCameraLabel || cameraDevices.length > 1) && (
+              <div className="mobile-camera-actions">
+                <small>{activeCameraLabel ? `กล้อง: ${activeCameraLabel}` : 'กำลังเลือกกล้องหลัง'}</small>
+                {cameraDevices.length > 1 && (
+                  <button type="button" onClick={() => void switchMobileCamera()}>
+                    <Icon name="cameraswitch" /> สลับกล้อง
+                  </button>
+                )}
+              </div>
+            )}
 
             <div className="scanner-input-block mobile-scanner-fallback">
               <input
