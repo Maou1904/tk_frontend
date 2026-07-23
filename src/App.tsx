@@ -1,5 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import axios from 'axios';
+import { BrowserMultiFormatReader } from '@zxing/browser';
+import type { IScannerControls } from '@zxing/browser';
+import { BarcodeFormat, DecodeHintType } from '@zxing/library';
 import html2canvas from 'html2canvas';
 import { jsPDF } from 'jspdf';
 import type { CartItem } from './types';
@@ -66,6 +69,19 @@ type BarcodeDetectorLike = {
 };
 
 type BarcodeDetectorConstructor = new (options?: { formats?: string[] }) => BarcodeDetectorLike;
+
+const BARCODE_DETECTOR_FORMATS = ['ean_13', 'ean_8', 'code_128', 'code_39', 'upc_a', 'upc_e', 'qr_code'];
+const ZXING_BARCODE_FORMATS = [
+  BarcodeFormat.EAN_13,
+  BarcodeFormat.EAN_8,
+  BarcodeFormat.CODE_128,
+  BarcodeFormat.CODE_39,
+  BarcodeFormat.CODE_93,
+  BarcodeFormat.UPC_A,
+  BarcodeFormat.UPC_E,
+  BarcodeFormat.ITF,
+  BarcodeFormat.QR_CODE,
+];
 
 interface Product {
   id: number;
@@ -407,6 +423,48 @@ function getBarcodeDetectorConstructor() {
   }
 
   return (window as Window & { BarcodeDetector?: BarcodeDetectorConstructor }).BarcodeDetector ?? null;
+}
+
+function getCameraUnavailableNotice() {
+  if (typeof window !== 'undefined' && window.isSecureContext === false) {
+    return 'เปิดกล้องไม่ได้ ต้องเปิด POS ผ่าน HTTPS หรือ localhost ก่อน browser ถึงจะอนุญาตให้ใช้กล้อง';
+  }
+
+  if (!navigator.mediaDevices?.getUserMedia) {
+    return 'Browser นี้ยังไม่เปิดกล้องจากหน้านี้ได้ ใช้ช่องกรอกบาร์โค้ดแทน';
+  }
+
+  return '';
+}
+
+function getCameraErrorNotice(error: unknown) {
+  if (error instanceof DOMException) {
+    if (error.name === 'NotAllowedError' || error.name === 'SecurityError') {
+      return 'เปิดกล้องไม่ได้ เพราะยังไม่ได้อนุญาตสิทธิ์กล้องใน browser';
+    }
+
+    if (error.name === 'NotFoundError' || error.name === 'DevicesNotFoundError') {
+      return 'ไม่พบกล้องบนอุปกรณ์นี้ ใช้ช่องกรอกบาร์โค้ดแทน';
+    }
+
+    if (error.name === 'NotReadableError' || error.name === 'TrackStartError') {
+      return 'เปิดกล้องไม่ได้ เพราะกล้องถูกใช้งานอยู่หรือระบบไม่พร้อม';
+    }
+  }
+
+  return 'เปิดกล้องไม่ได้ ตรวจ permission ของ browser';
+}
+
+function createZxingReader() {
+  const hints = new Map<DecodeHintType, unknown>();
+  hints.set(DecodeHintType.POSSIBLE_FORMATS, ZXING_BARCODE_FORMATS);
+  hints.set(DecodeHintType.TRY_HARDER, true);
+
+  return new BrowserMultiFormatReader(hints, {
+    delayBetweenScanAttempts: 150,
+    delayBetweenScanSuccess: 500,
+    tryPlayVideoTimeout: 5000,
+  });
 }
 
 const API_BASE_URL = getApiBaseUrl();
@@ -930,6 +988,7 @@ export default function App() {
   const scannerVideoRef = useRef<HTMLVideoElement>(null);
   const scannerStreamRef = useRef<MediaStream | null>(null);
   const scannerFrameRef = useRef<number | null>(null);
+  const scannerControlsRef = useRef<IScannerControls | null>(null);
   const handledPrintRequestIdsRef = useRef<Set<number>>(new Set());
   const previousGasSelectedCountRef = useRef(0);
   const gasKeyboardScrollTopRef = useRef<number | null>(null);
@@ -2110,6 +2169,9 @@ export default function App() {
       scannerFrameRef.current = null;
     }
 
+    scannerControlsRef.current?.stop();
+    scannerControlsRef.current = null;
+
     scannerStreamRef.current?.getTracks().forEach((track) => track.stop());
     scannerStreamRef.current = null;
 
@@ -2122,15 +2184,41 @@ export default function App() {
     }
   }
 
-  async function startCameraScanner() {
-    const BarcodeDetector = getBarcodeDetectorConstructor();
-    if (!navigator.mediaDevices?.getUserMedia) {
-      setScannerNotice('Browser นี้ยังไม่เปิดกล้องจากหน้านี้ได้ ใช้ช่องกรอกบาร์โค้ดแทน');
+  async function startZxingScanner(stream: MediaStream, video: HTMLVideoElement) {
+    const reader = createZxingReader();
+    let submittedBarcode = false;
+
+    const controls = await reader.decodeFromStream(stream, video, (result, error, activeControls) => {
+      if (submittedBarcode || error || !result) {
+        return;
+      }
+
+      const barcode = result.getText().trim();
+      if (!barcode) {
+        return;
+      }
+
+      submittedBarcode = true;
+      activeControls.stop();
+      void (async () => {
+        await sendScannerBarcode(barcode);
+        stopCameraScanner();
+      })();
+    });
+
+    if (scannerStreamRef.current !== stream) {
+      controls.stop();
       return;
     }
 
-    if (!BarcodeDetector) {
-      setScannerNotice('มือถือ/Browser นี้ยังไม่รองรับ BarcodeDetector ใช้ช่องกรอกแทนได้');
+    scannerControlsRef.current = controls;
+    setScannerNotice('เปิดกล้องแล้ว กำลังสแกนบาร์โค้ดด้วยตัวอ่านสำหรับมือถือ');
+  }
+
+  async function startCameraScanner() {
+    const unavailableNotice = getCameraUnavailableNotice();
+    if (unavailableNotice) {
+      setScannerNotice(unavailableNotice);
       return;
     }
 
@@ -2144,15 +2232,31 @@ export default function App() {
 
       const video = scannerVideoRef.current;
       if (!video) {
+        stopCameraScanner();
+        setScannerNotice('เปิดกล้องไม่ได้ เพราะหน้าตัวอย่างกล้องยังไม่พร้อม ลองกด Scan ใหม่');
         return;
       }
 
       video.srcObject = stream;
       await video.play();
 
-      const detector = new BarcodeDetector({
-        formats: ['ean_13', 'ean_8', 'code_128', 'code_39', 'upc_a', 'upc_e', 'qr_code'],
-      });
+      const BarcodeDetector = getBarcodeDetectorConstructor();
+      if (!BarcodeDetector) {
+        await startZxingScanner(stream, video);
+        return;
+      }
+
+      let detector: BarcodeDetectorLike;
+      try {
+        detector = new BarcodeDetector({
+          formats: BARCODE_DETECTOR_FORMATS,
+        });
+      } catch {
+        await startZxingScanner(stream, video);
+        return;
+      }
+
+      setScannerNotice('เปิดกล้องแล้ว กำลังสแกนบาร์โค้ด');
       let lastDetectedBarcode = '';
 
       const scanFrame = async () => {
@@ -2177,9 +2281,9 @@ export default function App() {
       };
 
       scannerFrameRef.current = window.requestAnimationFrame(scanFrame);
-    } catch {
-      setCameraActive(false);
-      setScannerNotice('เปิดกล้องไม่ได้ ตรวจ permission ของ browser');
+    } catch (error) {
+      stopCameraScanner();
+      setScannerNotice(getCameraErrorNotice(error));
     }
   }
 
@@ -3544,7 +3648,7 @@ export default function App() {
 
           <div className={`mobile-camera-panel ${mobileScannerOpen ? 'open' : ''}`}>
             <div className="scanner-camera-frame mobile-camera-frame">
-              <video ref={scannerVideoRef} muted playsInline aria-label="Barcode camera preview" />
+              <video ref={scannerVideoRef} muted playsInline autoPlay aria-label="Barcode camera preview" />
               {!cameraActive && (
                 <div>
                   <Icon name="photo_camera" />
