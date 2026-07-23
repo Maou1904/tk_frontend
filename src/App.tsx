@@ -1,10 +1,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import type { ReactNode } from 'react';
 import axios from 'axios';
 import { BrowserMultiFormatReader } from '@zxing/browser';
 import type { IScannerControls } from '@zxing/browser';
 import { BarcodeFormat, DecodeHintType } from '@zxing/library';
 import html2canvas from 'html2canvas';
 import { jsPDF } from 'jspdf';
+import { QRCodeSVG } from 'qrcode.react';
 import type { CartItem } from './types';
 import './App.css';
 
@@ -144,6 +146,8 @@ interface ClosingCheck {
   note?: string;
 }
 
+type GasStockKind = 'FULL' | 'EMPTY';
+
 interface ClosingSummary {
   session: AppSessionResponse;
   previousClosedSession?: AppSessionResponse | null;
@@ -165,6 +169,14 @@ interface ClosingSummary {
       pendingReturnQuantity: number;
       total: number;
       deliveryFeeTotal: number;
+      serviceStats?: {
+        paidJobs: number;
+        unpaidJobs: number;
+        fullyReturnedJobs: number;
+        pendingReturnJobs: number;
+        completedJobs: number;
+        openJobs: number;
+      };
       items: Array<{ id: string; name: string; operation: string; quantity: number; total: number }>;
       pendingReturns: Array<{ id: string; tankName: string; quantity: number }>;
       tankBalance: Array<{
@@ -172,10 +184,18 @@ interface ClosingSummary {
         name: string;
         operation: string;
         openingStock: number;
+        openingFullStock?: number;
+        openingEmptyStock?: number;
+        openingTotalStock?: number;
         currentStock: number;
+        currentFullStock?: number;
+        currentEmptyStock?: number;
+        currentTotalStock?: number;
         soldQuantity: number;
         returnedQuantity: number;
         adjustedQuantity: number;
+        adjustedFullQuantity?: number;
+        adjustedEmptyQuantity?: number;
         pendingQuantity: number;
         expectedMissing: number;
         status: 'BALANCED' | 'PENDING_RETURN' | 'MISMATCH' | string;
@@ -213,7 +233,13 @@ interface ApiGasItem {
   name: string;
   operation: GasItem['operation'];
   price: number | string;
-  stock: number;
+  stock?: number | string;
+  fullStock?: number | string;
+  full_stock?: number | string;
+  emptyStock?: number | string;
+  empty_stock?: number | string;
+  totalStock?: number | string;
+  total_stock?: number | string;
   imageUrl?: string;
   image_url?: string;
 }
@@ -295,6 +321,9 @@ interface GasItem {
   operation: string;
   price: number;
   stock: number;
+  fullStock: number;
+  emptyStock: number;
+  totalStock: number;
   imageUrl: string;
 }
 
@@ -340,6 +369,7 @@ interface StockAdjustment {
   productName: string;
   itemType?: string;
   itemId?: string;
+  stockKind?: string;
   delta: number;
   reason: string;
   staffName: string;
@@ -749,6 +779,7 @@ function normalizeStockMovement(log: StockAdjustment): StockAdjustment {
   return {
     ...log,
     id: String(log.id),
+    stockKind: log.stockKind ?? 'GENERAL',
     delta: Number(log.delta),
     createdAt,
     date: log.date || dateInputValue(createdAt),
@@ -995,12 +1026,18 @@ function normalizeProduct(product: ApiProduct): Product {
 }
 
 function normalizeGasItem(item: ApiGasItem): GasItem {
+  const fullStock = Number(item.fullStock ?? item.full_stock ?? item.stock ?? 0);
+  const emptyStock = Number(item.emptyStock ?? item.empty_stock ?? 0);
+  const totalStock = Number(item.totalStock ?? item.total_stock ?? fullStock + emptyStock);
   return {
     id: item.id,
     name: item.name,
     operation: item.operation,
     price: Number(item.price),
-    stock: Number(item.stock ?? 0),
+    stock: fullStock,
+    fullStock,
+    emptyStock,
+    totalStock,
     imageUrl: item.imageUrl ?? item.image_url ?? '',
   };
 }
@@ -1104,13 +1141,14 @@ function Icon({ name }: { name: string }) {
   return <span className="material-symbols-outlined" aria-hidden="true">{name}</span>;
 }
 
-function PanelTitle({ icon, title, detail }: { icon: string; title: string; detail?: string }) {
+function PanelTitle({ icon, title, detail, actions }: { icon: string; title: string; detail?: string; actions?: ReactNode }) {
   return (
     <div className="panel-title">
       <div>
         <h3><Icon name={icon} /> {title}</h3>
         {detail && <p>{detail}</p>}
       </div>
+      {actions && <div className="panel-title-actions">{actions}</div>}
     </div>
   );
 }
@@ -1153,6 +1191,7 @@ export default function App() {
   const [cameraActive, setCameraActive] = useState(false);
   const [cameraDevices, setCameraDevices] = useState<CameraDeviceOption[]>([]);
   const [activeCameraLabel, setActiveCameraLabel] = useState('');
+  const [sessionQrOpen, setSessionQrOpen] = useState(false);
   const [currentView, setCurrentView] = useState<View>('POS');
   const [apiStatus, setApiStatus] = useState('กำลังโหลดสินค้าใน tingkum_db');
   const [appSession, setAppSession] = useState<AppSessionResponse | null>(null);
@@ -1167,6 +1206,10 @@ export default function App() {
   const [barcodeInput, setBarcodeInput] = useState('');
   const [memberPhone, setMemberPhone] = useState('');
   const [currentMember, setCurrentMember] = useState<Member | null>(null);
+  const [memberCreateOpen, setMemberCreateOpen] = useState(false);
+  const [pendingMemberPhone, setPendingMemberPhone] = useState('');
+  const [memberCreateDraft, setMemberCreateDraft] = useState({ name: '', note: '' });
+  const [isCreatingMember, setIsCreatingMember] = useState(false);
   const [cashierId, setCashierId] = useState('');
   const [posPayment, setPosPayment] = useState<PaymentMethod>('เงินสด');
   const [cashReceived, setCashReceived] = useState(0);
@@ -1209,10 +1252,12 @@ export default function App() {
     name: '',
     operation: 'ขายแก๊ส',
     price: '',
-    stock: '1',
+    fullStock: '1',
+    emptyStock: '0',
     imageUrl: '',
   });
   const [gasCorrectionItemId, setGasCorrectionItemId] = useState('');
+  const [gasCorrectionStockKind, setGasCorrectionStockKind] = useState<GasStockKind>('FULL');
   const [gasCorrectionDelta, setGasCorrectionDelta] = useState('1');
   const [gasCorrectionReason, setGasCorrectionReason] = useState('');
 
@@ -1718,6 +1763,11 @@ export default function App() {
   useEffect(() => {
     if (currentView !== 'POS') {
       setMobileScannerOpen(false);
+      setSessionQrOpen(false);
+      setMemberCreateOpen(false);
+      setPendingMemberPhone('');
+      setMemberCreateDraft({ name: '', note: '' });
+      setIsCreatingMember(false);
     }
   }, [currentView]);
 
@@ -1762,6 +1812,9 @@ export default function App() {
   const gasSelectedCount = gasOrderItems.reduce((sum, item) => sum + item.quantity, 0);
   const gasSubtotal = gasOrderItems.reduce((sum, item) => sum + item.price * item.quantity, 0);
   const gasTotal = gasSubtotal + Math.max(0, gasDeliveryFee);
+  const gasFullStockTotal = gasItems.reduce((sum, item) => sum + item.fullStock, 0);
+  const gasEmptyStockTotal = gasItems.reduce((sum, item) => sum + item.emptyStock, 0);
+  const gasStockTotal = gasItems.reduce((sum, item) => sum + item.totalStock, 0);
   const gasReturnedCount = Math.min(gasSelectedCount, Math.max(0, gasReturnedTankQuantity));
   const gasPendingTankCount = Math.max(0, gasSelectedCount - gasReturnedCount);
   const activeGasJobs = gasJobs.filter((job) =>
@@ -2291,6 +2344,13 @@ export default function App() {
     void handleBarcodeValue(barcodeInput, 'desktop');
   }
 
+  function closeMemberCreateDialog() {
+    setMemberCreateOpen(false);
+    setPendingMemberPhone('');
+    setMemberCreateDraft({ name: '', note: '' });
+    setIsCreatingMember(false);
+  }
+
   async function sendScannerBarcode(value = scannerBarcode) {
     const barcode = value.trim();
     if (!barcode) {
@@ -2582,7 +2642,16 @@ export default function App() {
       const response = await axios.get<Member[]>(`${API_BASE_URL}/api/members?phone=${encodeURIComponent(normalizedPhone)}`);
       const member = response.data[0] ?? null;
       setCurrentMember(member);
-      setPosNotice(member ? `พบสมาชิก ${member.name}` : 'ไม่พบสมาชิก เบอร์นี้ขายแบบลูกค้าทั่วไปได้');
+      if (member) {
+        closeMemberCreateDialog();
+        setPosNotice(`พบสมาชิก ${member.name}`);
+        return;
+      }
+
+      setPendingMemberPhone(normalizedPhone);
+      setMemberCreateDraft({ name: '', note: '' });
+      setMemberCreateOpen(isOwner);
+      setPosNotice(isOwner ? `ไม่พบสมาชิกเบอร์ ${normalizedPhone}` : 'ไม่พบสมาชิก เบอร์นี้ขายแบบลูกค้าทั่วไปได้');
     } catch {
       setCurrentMember(null);
       setPosNotice('ค้นหา member จาก tingkum_db ไม่สำเร็จ');
@@ -2595,24 +2664,30 @@ export default function App() {
       return;
     }
 
-    const phone = memberPhone.replace(/\D/g, '');
+    const phone = pendingMemberPhone || memberPhone.replace(/\D/g, '');
     if (!/^0\d{9}$/.test(phone)) {
       setPosNotice('กรอกเบอร์มือถือ 10 หลักก่อนสร้าง member');
       return;
     }
 
-    const name = window.prompt(`ชื่อลูกค้าสำหรับเบอร์ ${phone}`)?.trim();
+    const name = memberCreateDraft.name.trim();
     if (!name) {
+      setPosNotice('กรอกชื่อลูกค้าก่อนสร้าง member');
       return;
     }
-    const note = window.prompt('หมายเหตุ member')?.trim() ?? '';
+    const note = memberCreateDraft.note.trim();
 
     try {
+      setIsCreatingMember(true);
       const response = await axios.post<Member>(`${API_BASE_URL}/api/members`, { name, phone, note });
       setCurrentMember(response.data);
+      setMemberPhone(response.data.phone);
+      closeMemberCreateDialog();
       setPosNotice(`สร้าง member ${response.data.name} แล้ว`);
     } catch {
       setPosNotice('สร้าง member ไม่สำเร็จ');
+    } finally {
+      setIsCreatingMember(false);
     }
   }
 
@@ -3370,11 +3445,12 @@ export default function App() {
     const name = gasItemDraft.name.trim();
     const operation = gasItemDraft.operation.trim() || 'ขายแก๊ส';
     const price = Number(gasItemDraft.price);
-    const stock = Number(gasItemDraft.stock);
+    const fullStock = Number(gasItemDraft.fullStock);
+    const emptyStock = Number(gasItemDraft.emptyStock);
     const imageUrl = gasItemDraft.imageUrl.trim();
 
-    if (!id || !name || !Number.isFinite(price) || price <= 0 || !Number.isFinite(stock) || stock < 0) {
-      setApiStatus('กรอกรหัส ชื่อถัง ราคา และจำนวนแก๊สให้ถูกต้อง');
+    if (!id || !name || !Number.isFinite(price) || price <= 0 || !Number.isFinite(fullStock) || fullStock < 0 || !Number.isFinite(emptyStock) || emptyStock < 0) {
+      setApiStatus('กรอกรหัส ชื่อถัง ราคา จำนวนถังเต็ม และจำนวนถังเปล่าให้ถูกต้อง');
       return;
     }
 
@@ -3384,7 +3460,9 @@ export default function App() {
         name,
         operation,
         price,
-        stock,
+        stock: fullStock,
+        fullStock,
+        emptyStock,
         imageUrl,
         reason: 'create gas item from stock page',
       });
@@ -3397,7 +3475,8 @@ export default function App() {
         name: '',
         operation,
         price: '',
-        stock: '1',
+        fullStock: '1',
+        emptyStock: '0',
         imageUrl: '',
       });
       setApiStatus(`เพิ่มแก๊ส ${gasItem.name} ลง tingkum_db แล้ว`);
@@ -3447,7 +3526,7 @@ export default function App() {
     try {
       await axios.patch<ApiGasItem>(
         `${API_BASE_URL}/api/gas/items/${encodeURIComponent(gasItem.id)}/stock`,
-        { delta, reason: gasCorrectionReason.trim() },
+        { delta, reason: gasCorrectionReason.trim(), stockKind: gasCorrectionStockKind },
       );
       await refreshGasItems();
       await refreshStockLog();
@@ -3801,7 +3880,22 @@ export default function App() {
     return (
       <div className={`pos-layout ${mobileCheckoutOpen ? 'mobile-checkout-open' : ''}`}>
         <section className="panel pos-workspace">
-          <PanelTitle icon="barcode_scanner" title="ขายสินค้า" detail={posNotice} />
+          <PanelTitle
+            icon="barcode_scanner"
+            title="ขายสินค้า"
+            detail={posNotice}
+            actions={(
+              <button
+                className="session-qr-top-button"
+                type="button"
+                aria-haspopup="dialog"
+                aria-expanded={sessionQrOpen}
+                onClick={() => setSessionQrOpen(true)}
+              >
+                <Icon name="qr_code_2" /> QR มือถือ
+              </button>
+            )}
+          />
 
           <div className="input-grid">
             <label className="field">
@@ -3829,14 +3923,10 @@ export default function App() {
                 <input
                   value={memberPhone}
                   onChange={(event) => setMemberPhone(event.target.value)}
+                  onKeyDown={(event) => event.key === 'Enter' && void lookupMember()}
                   placeholder="0812345678"
                 />
                 <button type="button" onClick={lookupMember}><Icon name="person_search" /> ค้นหา</button>
-                {isOwner && (
-                  <button type="button" onClick={() => void createMemberFromPhone()}>
-                    <Icon name="person_add" /> สร้าง
-                  </button>
-                )}
               </div>
             </label>
           </div>
@@ -3881,14 +3971,104 @@ export default function App() {
             </div>
           </div>
 
-          <div className="scan-session-panel">
-            <div>
-              <span className="badge neutral">POS Session</span>
-              <strong>Session {scanSessionId}</strong>
-              <small>เปิด URL นี้บนมือถือเพื่อใช้ POS เดียวกัน รายการสินค้า sync กับเครื่องนี้</small>
+          {sessionQrOpen && (
+            <div className="session-qr-overlay" role="presentation" onClick={() => setSessionQrOpen(false)}>
+              <div
+                className="session-qr-dialog"
+                role="dialog"
+                aria-modal="true"
+                aria-labelledby="session-qr-title"
+                onClick={(event) => event.stopPropagation()}
+              >
+                <div className="session-qr-dialog-head">
+                  <div>
+                    <span className="badge neutral">POS Session</span>
+                    <h3 id="session-qr-title">สแกน QR เพื่อเปิดบนมือถือ</h3>
+                    <small>Session {scanSessionId}</small>
+                  </div>
+                  <button type="button" aria-label="ปิด QR" onClick={() => setSessionQrOpen(false)}>
+                    <Icon name="close" />
+                  </button>
+                </div>
+
+                <div className="session-qr-code large">
+                  <QRCodeSVG
+                    value={scannerUrl}
+                    size={248}
+                    level="M"
+                    marginSize={2}
+                    bgColor="#ffffff"
+                    fgColor="#111827"
+                    title={`POS session ${scanSessionId}`}
+                  />
+                </div>
+
+                <label className="field session-qr-url">
+                  <span>ลิงก์สำรอง</span>
+                  <input value={scannerUrl} readOnly onFocus={(event) => event.target.select()} />
+                </label>
+              </div>
             </div>
-            <input value={scannerUrl} readOnly onFocus={(event) => event.target.select()} />
-          </div>
+          )}
+
+          {memberCreateOpen && (
+            <div className="modal-backdrop" role="presentation" onClick={closeMemberCreateDialog}>
+              <section
+                className="password-panel member-create-panel"
+                role="dialog"
+                aria-modal="true"
+                aria-labelledby="member-create-title"
+                onClick={(event) => event.stopPropagation()}
+              >
+                <div className="modal-head">
+                  <div>
+                    <span className="badge warning">ไม่พบสมาชิก</span>
+                    <h2 id="member-create-title">สร้าง member ใหม่?</h2>
+                    <p>เบอร์ {pendingMemberPhone} ยังไม่มีในระบบ</p>
+                  </div>
+                  <button className="icon-button" type="button" title="ปิด" onClick={closeMemberCreateDialog}>
+                    <Icon name="close" />
+                  </button>
+                </div>
+
+                <div className="form-stack">
+                  <label className="field">
+                    <span>ชื่อลูกค้า</span>
+                    <input
+                      value={memberCreateDraft.name}
+                      onChange={(event) => setMemberCreateDraft({ ...memberCreateDraft, name: event.target.value })}
+                      onKeyDown={(event) => event.key === 'Enter' && void createMemberFromPhone()}
+                      autoFocus
+                    />
+                  </label>
+                  <label className="field">
+                    <span>หมายเหตุ</span>
+                    <input
+                      value={memberCreateDraft.note}
+                      onChange={(event) => setMemberCreateDraft({ ...memberCreateDraft, note: event.target.value })}
+                      onKeyDown={(event) => event.key === 'Enter' && void createMemberFromPhone()}
+                      placeholder="เช่น ลูกค้าประจำ หรือที่อยู่ย่อ"
+                    />
+                  </label>
+                </div>
+
+                <div className="member-create-actions">
+                  <button className="secondary-action" type="button" onClick={closeMemberCreateDialog}>
+                    ใช้ลูกค้าทั่วไป
+                  </button>
+                  <button
+                    className="primary-action"
+                    type="button"
+                    onClick={() => void createMemberFromPhone()}
+                    disabled={isCreatingMember}
+                  >
+                    <Icon name={isCreatingMember ? 'hourglass_top' : 'person_add'} />
+                    {isCreatingMember ? 'กำลังสร้าง...' : 'สร้าง member'}
+                  </button>
+                </div>
+              </section>
+            </div>
+          )}
 
           <div className="context-row">
             <div className="mini-card">
@@ -4163,10 +4343,15 @@ export default function App() {
                 <img src={item.imageUrl} alt={item.name} />
                 <strong>{item.name}</strong>
                 <span>{formatMoney(item.price)}</span>
-                <small>คงเหลือ {item.stock} ถัง</small>
+                <div className="gas-stock-counts">
+                  <small><b>{item.fullStock}</b> เต็ม</small>
+                  <small><b>{item.emptyStock}</b> เปล่า</small>
+                  <small><b>{item.totalStock}</b> รวม</small>
+                </div>
                 <div className="stepper large">
                   <button
                     type="button"
+                    disabled={(gasQuantities[item.id] ?? 0) <= 0}
                     onClick={(event) => {
                       event.stopPropagation();
                       updateGasQuantity(item.id, -1);
@@ -4177,6 +4362,7 @@ export default function App() {
                   <span>{gasQuantities[item.id] ?? 0}</span>
                   <button
                     type="button"
+                    disabled={(gasQuantities[item.id] ?? 0) >= item.fullStock}
                     onClick={(event) => {
                       event.stopPropagation();
                       updateGasQuantity(item.id, 1);
@@ -4292,6 +4478,9 @@ export default function App() {
           </div>
 
           <div className="gas-summary-lines">
+            <div><span>ถังเต็มคงเหลือ</span><strong>{gasFullStockTotal}</strong></div>
+            <div><span>ถังเปล่าคงเหลือ</span><strong>{gasEmptyStockTotal}</strong></div>
+            <div><span>ถังรวมในระบบ</span><strong>{gasStockTotal}</strong></div>
             <div><span>จำนวนถัง</span><strong>{gasSelectedCount}</strong></div>
             <div><span>ราคาสินค้า</span><strong>{formatMoney(gasSubtotal)}</strong></div>
             <label>
@@ -5157,6 +5346,13 @@ export default function App() {
                 </select>
               </label>
               <label className="field">
+                <span>ชนิดถัง</span>
+                <select value={gasCorrectionStockKind} onChange={(event) => setGasCorrectionStockKind(event.target.value as GasStockKind)}>
+                  <option value="FULL">ถังเต็ม</option>
+                  <option value="EMPTY">ถังเปล่า</option>
+                </select>
+              </label>
+              <label className="field">
                 <span>เพิ่ม/ลดจำนวน</span>
                 <input type="number" value={gasCorrectionDelta} onChange={(event) => setGasCorrectionDelta(event.target.value)} />
               </label>
@@ -5210,13 +5406,23 @@ export default function App() {
               />
             </label>
             <label className="field">
-              <span>จำนวนเริ่มต้น</span>
+              <span>ถังเต็มเริ่มต้น</span>
               <input
                 type="number"
                 min="0"
                 step="1"
-                value={gasItemDraft.stock}
-                onChange={(event) => setGasItemDraft({ ...gasItemDraft, stock: event.target.value })}
+                value={gasItemDraft.fullStock}
+                onChange={(event) => setGasItemDraft({ ...gasItemDraft, fullStock: event.target.value })}
+              />
+            </label>
+            <label className="field">
+              <span>ถังเปล่าเริ่มต้น</span>
+              <input
+                type="number"
+                min="0"
+                step="1"
+                value={gasItemDraft.emptyStock}
+                onChange={(event) => setGasItemDraft({ ...gasItemDraft, emptyStock: event.target.value })}
               />
             </label>
             <label className="field">
@@ -5242,7 +5448,9 @@ export default function App() {
                     <th>ถังแก๊ส</th>
                     <th>ประเภท</th>
                     <th>ราคา</th>
-                    <th>คงเหลือ</th>
+                    <th>ถังเต็ม</th>
+                    <th>ถังเปล่า</th>
+                    <th>รวม</th>
                     <th>สถานะ</th>
                     <th></th>
                   </tr>
@@ -5256,10 +5464,12 @@ export default function App() {
                       </td>
                       <td>{item.operation}</td>
                       <td>{formatMoney(item.price)}</td>
-                      <td>{item.stock} ถัง</td>
+                      <td>{item.fullStock} ถัง</td>
+                      <td>{item.emptyStock} ถัง</td>
+                      <td>{item.totalStock} ถัง</td>
                       <td>
-                        <span className={`badge ${item.stock > 0 ? 'success' : 'warning'}`}>
-                          {item.stock > 0 ? 'พร้อมขาย' : 'หมด'}
+                        <span className={`badge ${item.fullStock > 0 ? 'success' : 'warning'}`}>
+                          {item.fullStock > 0 ? 'พร้อมขาย' : 'ถังเต็มหมด'}
                         </span>
                       </td>
                       <td>
@@ -5293,7 +5503,11 @@ export default function App() {
               <EmptyState text="ไม่มี log ในวันที่เลือก" />
             ) : filteredStockLog.map((log) => (
               <div key={log.id}>
-                <strong>{log.productName}</strong>
+                <strong>
+                  {log.productName}
+                  {log.itemType === 'GAS' && log.stockKind === 'FULL' ? ' (ถังเต็ม)' : ''}
+                  {log.itemType === 'GAS' && log.stockKind === 'EMPTY' ? ' (ถังเปล่า)' : ''}
+                </strong>
                 <span className={log.delta > 0 ? 'text-success' : 'text-danger'}>{log.delta > 0 ? '+' : ''}{log.delta}</span>
                 <span>{log.reason}</span>
                 <small>{log.staffName} | {formatReceiptDateTime(new Date(log.createdAt))}</small>
@@ -5665,28 +5879,46 @@ export default function App() {
                 <div><span>ขายถัง</span><strong>{closingSummary.sections.gas.soldQuantity}</strong></div>
                 <div><span>คืนถัง</span><strong>{closingSummary.sections.gas.returnedQuantity}</strong></div>
                 <div><span>ค่าส่ง</span><strong>{formatMoney(closingSummary.sections.gas.deliveryFeeTotal)}</strong></div>
+                <div><span>งานเสร็จ</span><strong>{closingSummary.sections.gas.serviceStats?.completedJobs ?? 0}</strong></div>
+                <div><span>งานเปิดค้าง</span><strong>{closingSummary.sections.gas.serviceStats?.openJobs ?? 0}</strong></div>
+                <div><span>ค้างชำระ</span><strong>{closingSummary.sections.gas.serviceStats?.unpaidJobs ?? 0}</strong></div>
+                <div><span>ยังไม่คืนถังครบ</span><strong>{closingSummary.sections.gas.serviceStats?.pendingReturnJobs ?? 0}</strong></div>
               </div>
               <div className="table-wrap closing-table">
                 {closingSummary.sections.gas.tankBalance.length === 0 ? (
                   <EmptyState text="ยังไม่มีรายการแก๊สให้ตรวจ" />
                 ) : (
                   <table>
-                    <thead><tr><th>ถัง</th><th>เปิดวัน</th><th>ขาย</th><th>คืน</th><th>คงเหลือระบบ</th><th>สถานะ</th></tr></thead>
+                    <thead><tr><th>ถัง</th><th>ต้นวัน</th><th>ขาย</th><th>คืน</th><th>ท้ายวัน</th><th>สถานะ</th></tr></thead>
                     <tbody>
-                      {closingSummary.sections.gas.tankBalance.map((item) => (
-                        <tr key={item.id}>
-                          <td><strong>{item.name}</strong><small>{item.operation}</small></td>
-                          <td>{item.openingStock}</td>
-                          <td>{item.soldQuantity}</td>
-                          <td>{item.returnedQuantity}</td>
-                          <td>{item.currentStock}</td>
-                          <td>
-                            <span className={`badge ${item.status === 'BALANCED' ? 'success' : item.status === 'PENDING_RETURN' ? 'warning' : 'danger'}`}>
-                              {gasBalanceText(item)}
-                            </span>
-                          </td>
-                        </tr>
-                      ))}
+                      {closingSummary.sections.gas.tankBalance.map((item) => {
+                        const openingFullStock = item.openingFullStock ?? item.openingStock;
+                        const openingEmptyStock = item.openingEmptyStock ?? 0;
+                        const openingTotalStock = item.openingTotalStock ?? item.openingStock;
+                        const currentFullStock = item.currentFullStock ?? item.currentStock;
+                        const currentEmptyStock = item.currentEmptyStock ?? 0;
+                        const currentTotalStock = item.currentTotalStock ?? item.currentStock;
+                        return (
+                          <tr key={item.id}>
+                            <td><strong>{item.name}</strong><small>{item.operation}</small></td>
+                            <td>
+                              <strong>{openingTotalStock}</strong>
+                              <small>เต็ม {openingFullStock} | เปล่า {openingEmptyStock}</small>
+                            </td>
+                            <td>{item.soldQuantity}</td>
+                            <td>{item.returnedQuantity}</td>
+                            <td>
+                              <strong>{currentTotalStock}</strong>
+                              <small>เต็ม {currentFullStock} | เปล่า {currentEmptyStock}</small>
+                            </td>
+                            <td>
+                              <span className={`badge ${item.status === 'BALANCED' ? 'success' : item.status === 'PENDING_RETURN' ? 'warning' : 'danger'}`}>
+                                {gasBalanceText(item)}
+                              </span>
+                            </td>
+                          </tr>
+                        );
+                      })}
                     </tbody>
                   </table>
                 )}
