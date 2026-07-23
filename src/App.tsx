@@ -122,6 +122,28 @@ interface ApiProduct {
   unit?: string;
 }
 
+interface ProductRegistrationRequest {
+  id: number;
+  barcode: string;
+  name: string;
+  price: number | string;
+  cost: number | string;
+  stock: number;
+  category: string;
+  minStock?: number;
+  min_stock?: number;
+  unit: string;
+  status: 'PENDING' | 'ACCEPTED' | 'REJECTED' | string;
+  requestedBy?: number | null;
+  requestedByName: string;
+  reviewedBy?: number | null;
+  reviewedByName?: string;
+  acceptedProductId?: number | null;
+  reviewReason?: string;
+  createdAt: string;
+  reviewedAt?: string | null;
+}
+
 interface CartSessionResponse {
   session_id: string;
   items: CartItem[];
@@ -1025,6 +1047,20 @@ function normalizeProduct(product: ApiProduct): Product {
   };
 }
 
+function normalizeProductRegistrationRequest(request: ProductRegistrationRequest): ProductRegistrationRequest {
+  return {
+    ...request,
+    id: Number(request.id),
+    price: Number(request.price),
+    cost: Number(request.cost),
+    stock: Number(request.stock),
+    minStock: Number(request.minStock ?? request.min_stock ?? 5),
+    requestedBy: request.requestedBy ?? null,
+    reviewedBy: request.reviewedBy ?? null,
+    acceptedProductId: request.acceptedProductId ?? null,
+  };
+}
+
 function normalizeGasItem(item: ApiGasItem): GasItem {
   const fullStock = Number(item.fullStock ?? item.full_stock ?? item.stock ?? 0);
   const emptyStock = Number(item.emptyStock ?? item.empty_stock ?? 0);
@@ -1217,6 +1253,9 @@ export default function App() {
   const [posNotice, setPosNotice] = useState('พร้อมขาย');
   const [isPrintingReceipt, setIsPrintingReceipt] = useState(false);
   const [unknownBarcode, setUnknownBarcode] = useState('');
+  const [productRegistrationRequests, setProductRegistrationRequests] = useState<ProductRegistrationRequest[]>([]);
+  const [productRequestNotice, setProductRequestNotice] = useState('');
+  const [isReviewingProductRequest, setIsReviewingProductRequest] = useState(false);
   const [newProductDraft, setNewProductDraft] = useState<NewProductDraft>({
     barcode: '',
     name: '',
@@ -1445,6 +1484,35 @@ export default function App() {
     axios.get<AuthUser[]>(`${API_BASE_URL}/api/users`)
       .then((response) => setUsers(response.data.map(normalizeAuthUser)))
       .catch(() => setApiStatus('โหลด user จาก tingkum_db ไม่สำเร็จ'));
+  }, [authSession, isOwner]);
+
+  useEffect(() => {
+    if (!authSession || !isOwner) {
+      setProductRegistrationRequests([]);
+      return;
+    }
+
+    let cancelled = false;
+    const syncProductRequests = () => {
+      axios.get<ProductRegistrationRequest[]>(`${API_BASE_URL}/api/product-registration-requests?status=PENDING`)
+        .then((response) => {
+          if (!cancelled) {
+            setProductRegistrationRequests(response.data.map(normalizeProductRegistrationRequest));
+          }
+        })
+        .catch(() => {
+          if (!cancelled) {
+            setProductRequestNotice('โหลดคำขอลงทะเบียนสินค้าไม่สำเร็จ');
+          }
+        });
+    };
+
+    syncProductRequests();
+    const intervalId = window.setInterval(syncProductRequests, 5000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(intervalId);
+    };
   }, [authSession, isOwner]);
 
   useEffect(() => {
@@ -1820,6 +1888,11 @@ export default function App() {
   const activeGasJobs = gasJobs.filter((job) =>
     !isCancelledStatus(job.status) && (job.status === 'กำลังดำเนินการ' || job.status === 'PENDING' || job.paid === false || job.emptyTankReturned === false),
   );
+  const activeProductRegistrationRequest = isOwner ? productRegistrationRequests[0] : undefined;
+
+  useEffect(() => {
+    setProductRequestNotice('');
+  }, [activeProductRegistrationRequest?.id]);
 
   useEffect(() => {
     const previousSelectedCount = previousGasSelectedCountRef.current;
@@ -2076,6 +2149,16 @@ export default function App() {
   async function refreshProducts() {
     const response = await axios.get<ApiProduct[]>(`${API_BASE_URL}/api/products`);
     setStockItems(response.data.map(normalizeProduct));
+  }
+
+  async function refreshProductRegistrationRequests() {
+    if (!isOwner) {
+      setProductRegistrationRequests([]);
+      return;
+    }
+
+    const response = await axios.get<ProductRegistrationRequest[]>(`${API_BASE_URL}/api/product-registration-requests?status=PENDING`);
+    setProductRegistrationRequests(response.data.map(normalizeProductRegistrationRequest));
   }
 
   async function refreshGasItems() {
@@ -2562,11 +2645,6 @@ export default function App() {
   }
 
   async function registerNewProductFromScan() {
-    if (!isOwner) {
-      setPosNotice('เฉพาะ owner เท่านั้นที่ลงทะเบียนสินค้าใหม่ได้');
-      return;
-    }
-
     const name = newProductDraft.name.trim();
     const barcode = newProductDraft.barcode.trim();
     const price = Number(newProductDraft.price);
@@ -2578,27 +2656,54 @@ export default function App() {
       return;
     }
 
+    const category = newProductDraft.category.trim() || 'ทั่วไป';
+    const unit = newProductDraft.unit.trim() || 'ชิ้น';
+    const normalizedMinStock = Number.isFinite(minStock) ? Math.max(0, minStock) : 5;
+    const productPayload = {
+      barcode,
+      name,
+      price,
+      cost: price,
+      stock,
+      category,
+      minStock: normalizedMinStock,
+      unit,
+    };
+
+    if (!isOwner) {
+      try {
+        const response = await axios.post<ProductRegistrationRequest>(
+          `${API_BASE_URL}/api/product-registration-requests`,
+          { ...productPayload, reason: 'request register from POS scan' },
+        );
+        setUnknownBarcode('');
+        setBarcodeInput('');
+        setPosNotice(`ส่งคำขอลงทะเบียน ${response.data.name} ให้ owner แล้ว`);
+        return;
+      } catch (error) {
+        if (axios.isAxiosError(error) && error.response?.status === 409) {
+          setPosNotice(`บาร์โค้ด ${barcode} มีอยู่แล้ว หรือมีคำขอค้างอยู่`);
+          return;
+        }
+        setPosNotice('ส่งคำขอลงทะเบียนสินค้าไม่สำเร็จ เพราะเชื่อมต่อ tingkum_db ไม่ได้');
+        return;
+      }
+    }
+
     let product: Product = {
       id: Math.max(0, ...stockItems.map((item) => item.id)) + 1,
       barcode,
       name,
       price,
       stock: Number.isFinite(stock) ? Math.max(0, stock) : 0,
-      category: newProductDraft.category.trim() || 'ทั่วไป',
-      minStock: Number.isFinite(minStock) ? Math.max(0, minStock) : 5,
-      unit: newProductDraft.unit.trim() || 'ชิ้น',
+      category,
+      minStock: normalizedMinStock,
+      unit,
     };
 
     try {
       const response = await axios.post<ApiProduct>(`${API_BASE_URL}/api/products`, {
-        barcode,
-        name,
-        price,
-        cost: price,
-        stock,
-        category: product.category,
-        minStock: product.minStock,
-        unit: product.unit,
+        ...productPayload,
         reason: 'register from POS scan',
       });
       product = {
@@ -2628,6 +2733,47 @@ export default function App() {
     setBarcodeInput('');
     setUnknownBarcode('');
     setPosNotice(`ลงทะเบียนและเพิ่ม ${product.name} เข้า bill แล้ว`);
+  }
+
+  async function reviewProductRegistrationRequest(requestId: number, action: 'ACCEPT' | 'REJECT') {
+    if (!isOwner || isReviewingProductRequest) {
+      return;
+    }
+
+    setIsReviewingProductRequest(true);
+    setProductRequestNotice(action === 'ACCEPT' ? 'กำลังอนุมัติสินค้าใหม่' : 'กำลังปฏิเสธคำขอ');
+
+    try {
+      const response = await axios.patch<{
+        request: ProductRegistrationRequest;
+        product: ApiProduct | null;
+      }>(
+        `${API_BASE_URL}/api/product-registration-requests/${encodeURIComponent(String(requestId))}`,
+        { action },
+      );
+      setProductRegistrationRequests((previous) => previous.filter((request) => request.id !== requestId));
+      if (response.data.product) {
+        const product = normalizeProduct(response.data.product);
+        setStockItems((previous) =>
+          previous.some((item) => item.id === product.id)
+            ? previous.map((item) => item.id === product.id ? product : item)
+            : [...previous, product],
+        );
+        await refreshStockLog();
+        setProductRequestNotice(`อนุมัติสินค้า ${product.name} แล้ว`);
+        return;
+      }
+      setProductRequestNotice(`ปฏิเสธคำขอ ${response.data.request.name} แล้ว`);
+    } catch (error) {
+      if (axios.isAxiosError(error) && error.response?.status === 409) {
+        setProductRequestNotice('อนุมัติไม่ได้ เพราะบาร์โค้ดนี้มีสินค้าอยู่แล้ว');
+        await refreshProductRegistrationRequests();
+        return;
+      }
+      setProductRequestNotice('รีวิวคำขอสินค้าไม่สำเร็จ');
+    } finally {
+      setIsReviewingProductRequest(false);
+    }
   }
 
   async function lookupMember() {
@@ -4147,8 +4293,8 @@ export default function App() {
 
               <div className="unknown-product-actions">
                 <button className="secondary-action" type="button" onClick={cancelUnknownProduct}>ยกเลิก</button>
-                <button className="primary-action" type="button" disabled={!isOwner} onClick={registerNewProductFromScan}>
-                  <Icon name="inventory" /> ลงทะเบียนสินค้าใหม่
+                <button className="primary-action" type="button" onClick={registerNewProductFromScan}>
+                  <Icon name="inventory" /> {isOwner ? 'ลงทะเบียนสินค้าใหม่' : 'ส่งให้ owner อนุมัติ'}
                 </button>
               </div>
             </div>
@@ -6114,6 +6260,64 @@ export default function App() {
     );
   }
 
+  function renderProductRegistrationRequestPanel() {
+    if (!activeProductRegistrationRequest) {
+      return null;
+    }
+
+    const request = activeProductRegistrationRequest;
+    return (
+      <div className="modal-backdrop product-request-backdrop" role="presentation">
+        <section
+          className="password-panel product-request-panel"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="product-request-title"
+        >
+          <div className="modal-head">
+            <div>
+              <span className="badge warning">คำขอลงทะเบียนสินค้า</span>
+              <h2 id="product-request-title">{request.name}</h2>
+              <p>{request.requestedByName} ส่งคำขอจาก POS</p>
+            </div>
+            <span className="badge neutral">#{request.id}</span>
+          </div>
+
+          <div className="product-request-detail">
+            <div><span>บาร์โค้ด</span><strong>{request.barcode}</strong></div>
+            <div><span>ราคา</span><strong>{formatMoney(Number(request.price))}</strong></div>
+            <div><span>สต็อกเริ่มต้น</span><strong>{request.stock}</strong></div>
+            <div><span>หมวดหมู่</span><strong>{request.category || 'ทั่วไป'}</strong></div>
+            <div><span>ขั้นต่ำ</span><strong>{request.minStock ?? request.min_stock ?? 5}</strong></div>
+            <div><span>หน่วย</span><strong>{request.unit || 'ชิ้น'}</strong></div>
+          </div>
+
+          {productRequestNotice && <p className="modal-note">{productRequestNotice}</p>}
+
+          <div className="member-create-actions">
+            <button
+              className="secondary-action danger"
+              type="button"
+              disabled={isReviewingProductRequest}
+              onClick={() => void reviewProductRegistrationRequest(request.id, 'REJECT')}
+            >
+              ปฏิเสธ
+            </button>
+            <button
+              className="primary-action"
+              type="button"
+              disabled={isReviewingProductRequest}
+              onClick={() => void reviewProductRegistrationRequest(request.id, 'ACCEPT')}
+            >
+              <Icon name={isReviewingProductRequest ? 'hourglass_top' : 'inventory'} />
+              {isReviewingProductRequest ? 'กำลังบันทึก...' : 'Accept'}
+            </button>
+          </div>
+        </section>
+      </div>
+    );
+  }
+
   function renderPage() {
     switch (currentView) {
       case 'POS':
@@ -6215,6 +6419,7 @@ export default function App() {
         </div>
       </div>
       {renderPasswordPanel()}
+      {renderProductRegistrationRequestPanel()}
     </>
   );
 }
