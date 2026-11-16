@@ -8,10 +8,12 @@ import html2canvas from 'html2canvas';
 import { jsPDF } from 'jspdf';
 import { QRCodeSVG } from 'qrcode.react';
 import type { CartItem } from './types';
+import PosAmountKeypad from './components/PosAmountKeypad';
 import './App.css';
 
 type View = 'POS' | 'GAS' | 'LOTTERY' | 'TOPUP' | 'HISTORY' | 'ANALYTICS' | 'STOCK' | 'STAFF' | 'CLOSING';
 type PaymentMethod = 'เงินสด' | 'PromptPay';
+type PosAmountField = 'cash' | 'discount';
 type SaleChannel = 'POS' | 'GAS' | 'LOTTERY' | 'TOPUP';
 type AnalyticsPeriod = 'day' | 'month' | 'year';
 type MobileTopupProvider = 'AIS' | 'TRUE' | 'DTAC';
@@ -459,6 +461,7 @@ const storageKeys = {
   deviceId: 'tingkum.deviceId.v1',
 } as const;
 const authSessionKey = 'tingkum.authSession.v1';
+const compactPosQuery = '(max-width: 1024px), (max-width: 1440px) and (any-pointer: coarse)';
 
 function getApiBaseUrl() {
   const configuredApiBaseUrl = import.meta.env.VITE_API_BASE_URL;
@@ -1198,6 +1201,8 @@ export default function App() {
   const sessionFromUrl = queryParams.get('session') || '';
   const pageScrollRef = useRef<HTMLElement | null>(null);
   const barcodeInputRef = useRef<HTMLInputElement>(null);
+  const posCheckoutRef = useRef<HTMLDialogElement>(null);
+  const posAmountTriggerRef = useRef<HTMLButtonElement>(null);
   const scannerVideoRef = useRef<HTMLVideoElement>(null);
   const scannerStreamRef = useRef<MediaStream | null>(null);
   const scannerFrameRef = useRef<number | null>(null);
@@ -1220,7 +1225,11 @@ export default function App() {
   const [isMobileViewport, setIsMobileViewport] = useState(() =>
     typeof window !== 'undefined' && window.matchMedia('(max-width: 560px)').matches,
   );
-  const [mobileCheckoutOpen, setMobileCheckoutOpen] = useState(false);
+  const [isCompactPos, setIsCompactPos] = useState(() =>
+    typeof window !== 'undefined' && window.matchMedia(compactPosQuery).matches,
+  );
+  const [posCheckoutOpen, setPosCheckoutOpen] = useState(false);
+  const [posAmountField, setPosAmountField] = useState<PosAmountField | null>(null);
   const [mobileScannerOpen, setMobileScannerOpen] = useState(false);
   const [scannerBarcode, setScannerBarcode] = useState('');
   const [scannerNotice, setScannerNotice] = useState('พร้อมส่งบาร์โค้ดเข้าหน้า POS');
@@ -1415,6 +1424,10 @@ export default function App() {
           const nextIsOpen = nextSession.status === 'OPEN' || nextSession.status === 'ACTIVE';
           setAppSession(nextSession);
           setScanSessionId(nextSession.session_id);
+          if (!nextIsOpen) {
+            setPosCheckoutOpen(false);
+            setPosAmountField(null);
+          }
           setCurrentView((view) => {
             if (!nextIsOpen && view !== 'CLOSING') {
               return 'CLOSING';
@@ -1592,6 +1605,22 @@ export default function App() {
 
     const mediaQuery = window.matchMedia('(max-width: 560px)');
     const syncViewport = () => setIsMobileViewport(mediaQuery.matches);
+    syncViewport();
+    mediaQuery.addEventListener('change', syncViewport);
+
+    return () => mediaQuery.removeEventListener('change', syncViewport);
+  }, []);
+
+  useEffect(() => {
+    const mediaQuery = window.matchMedia(compactPosQuery);
+    const syncViewport = () => {
+      setIsCompactPos(mediaQuery.matches);
+      if (!mediaQuery.matches) {
+        setPosCheckoutOpen(false);
+        setPosAmountField(null);
+        setMobileScannerOpen(false);
+      }
+    };
     syncViewport();
     mediaQuery.addEventListener('change', syncViewport);
 
@@ -1790,12 +1819,12 @@ export default function App() {
   }, [analyticsQuery, authSession, currentView]);
 
   useEffect(() => {
-    if (currentView !== 'POS' || mobileCheckoutOpen || mobileScannerOpen) {
+    if (currentView !== 'POS' || isCompactPos || mobileScannerOpen) {
       return;
     }
 
     barcodeInputRef.current?.focus();
-  }, [currentView, mobileCheckoutOpen, mobileScannerOpen, posCart.length, unknownBarcode]);
+  }, [currentView, isCompactPos, mobileScannerOpen, posCart.length, unknownBarcode]);
 
   useEffect(() => {
     if (!authSession) {
@@ -2914,6 +2943,17 @@ export default function App() {
     }
   }
 
+  function closePosCheckout() {
+    posCheckoutRef.current?.close();
+    setPosCheckoutOpen(false);
+    setPosAmountField(null);
+  }
+
+  function closePosAmountKeypad() {
+    setPosAmountField(null);
+    window.requestAnimationFrame(() => posAmountTriggerRef.current?.focus());
+  }
+
   async function completePosSale() {
     if (!requireShopOpen(setPosNotice)) {
       return;
@@ -2977,7 +3017,7 @@ export default function App() {
       setPosCart(response.data.cart.items.map(normalizeCartItem));
       setBillDiscount(0);
       setCashReceived(0);
-      setMobileCheckoutOpen(false);
+      closePosCheckout();
     } catch (error) {
       console.error(error);
       if (axios.isAxiosError(error) && error.response?.status === 409) {
@@ -3954,77 +3994,114 @@ export default function App() {
     setAnalyticsNotice(`ส่งออก Excel ${analyticsSales.length} รายการแล้ว`);
   }
 
-  function renderMobileReceiptCheckout() {
+  function renderPosCheckout() {
+    const hasItems = posCart.length > 0;
+
     return (
-      <section className="panel mobile-receipt-view">
-        <button className="link-button mobile-back-button" type="button" onClick={() => setMobileCheckoutOpen(false)}>
-          <Icon name="arrow_back" /> กลับไปยิงสินค้า
-        </button>
+      <dialog
+        className="pos-checkout-dialog"
+        id="pos-checkout-dialog"
+        aria-labelledby="pos-checkout-title"
+        ref={(dialog) => {
+          posCheckoutRef.current = dialog;
+          if (dialog && !dialog.open) dialog.showModal();
+        }}
+        onCancel={(event) => {
+          event.preventDefault();
+          if (posAmountField) closePosAmountKeypad();
+          else closePosCheckout();
+        }}
+        onClick={(event) => {
+          if (event.target === event.currentTarget) closePosCheckout();
+        }}
+      >
+        <div className="pos-checkout-sheet">
+          <header className="pos-checkout-header">
+            <h2 id="pos-checkout-title"><Icon name="receipt_long" /> สรุปชำระเงิน</h2>
+            <button type="button" className="icon-button" aria-label="ปิดสรุปชำระเงิน" onClick={closePosCheckout}>
+              <Icon name="close" />
+            </button>
+            <div className="pos-checkout-total"><span>ยอดที่ต้องชำระ</span><strong>{formatMoney(posTotal)}</strong></div>
+          </header>
 
-        <label className="field mobile-cashier-field">
-          <span>พนักงานรับขาย</span>
-          <select value={cashierId} onChange={(event) => setCashierId(event.target.value)}>
-            {activeStaff.map((staff) => <option key={staff.id} value={staff.id}>{staff.name} - {staff.role}</option>)}
-          </select>
-        </label>
+          {posAmountField && (
+            <PosAmountKeypad
+              key={posAmountField}
+              label={posAmountField === 'cash' ? 'รับเงินสด' : 'ส่วนลดท้ายบิล'}
+              value={posAmountField === 'cash' ? cashReceived : billDiscount}
+              onCancel={closePosAmountKeypad}
+              onConfirm={(amount) => {
+                if (posAmountField === 'cash') setCashReceived(amount);
+                else setBillDiscount(amount);
+                closePosAmountKeypad();
+              }}
+            />
+          )}
 
-        <div className="mobile-receipt-paper">
-          <div className="mobile-receipt-heading">
-            <strong>Tingkum</strong>
-            <span>ใบสรุปชำระเงิน</span>
-          </div>
+          <div className="pos-checkout-details" hidden={Boolean(posAmountField)}>
+            <div className="pos-checkout-fields">
+              {hasItems ? (
+                <details className="pos-checkout-items">
+                  <summary><span>สินค้า {posCart.length} รายการ</span><strong>{formatMoney(posSubtotal)}</strong></summary>
+                  <ul>
+                    {posCart.map((item) => (
+                      <li key={item.id}>
+                        <span>{item.name} × {item.quantity}</span>
+                        <strong>{formatMoney(item.price * item.quantity - item.discount)}</strong>
+                      </li>
+                    ))}
+                  </ul>
+                </details>
+              ) : <EmptyState text="ยังไม่มีสินค้าในตะกร้า" />}
 
-          <div className="mobile-receipt-items">
-            {posCart.map((item) => (
-              <div key={item.id}>
-                <span>{item.name} x {item.quantity}</span>
-                <strong>{formatMoney(item.price * item.quantity - item.discount)}</strong>
+              <label className="pos-checkout-cashier">
+                <span>พนักงานรับขาย</span>
+                <select value={cashierId} disabled={isPrintingReceipt} onChange={(event) => setCashierId(event.target.value)}>
+                  {activeStaff.map((staff) => <option key={staff.id} value={staff.id}>{staff.name} - {staff.role}</option>)}
+                </select>
+              </label>
+
+              <button className="pos-amount-field" type="button" disabled={!hasItems || isPrintingReceipt} onClick={(event) => {
+                posAmountTriggerRef.current = event.currentTarget;
+                setPosAmountField('discount');
+              }}>
+                <span>ส่วนลดท้ายบิล</span><strong>{formatMoney(billDiscount)}</strong><Icon name="dialpad" />
+              </button>
+
+              <div className="pos-cash-entry">
+                <button className="pos-amount-field" type="button" disabled={!hasItems || isPrintingReceipt} onClick={(event) => {
+                  posAmountTriggerRef.current = event.currentTarget;
+                  setPosAmountField('cash');
+                }}>
+                  <span>รับเงินสด</span><strong>{formatMoney(cashReceived)}</strong><Icon name="dialpad" />
+                </button>
+                <button className="secondary-action" type="button" disabled={!hasItems || isPrintingReceipt} onClick={() => setCashReceived(posTotal)}>พอดี</button>
               </div>
-            ))}
-          </div>
 
-          <div className="mobile-receipt-total">
-            <div><span>ยอดสินค้า</span><strong>{formatMoney(posSubtotal)}</strong></div>
-            <label>
-              <span>ส่วนลดท้ายบิล</span>
-              <input type="number" min="0" value={billDiscount || ''} onChange={(event) => setBillDiscount(Number(event.target.value))} />
-            </label>
-            <div className="grand-total"><span>ต้องชำระ</span><strong>{formatMoney(posTotal)}</strong></div>
-          </div>
+              <div className="change-box pos-checkout-change"><span>เงินทอน</span><strong>{formatMoney(posChange)}</strong></div>
+            </div>
 
-          <label className="field">
-            <span>รับเงินสด</span>
-            <input type="number" min="0" value={cashReceived || ''} onChange={(event) => setCashReceived(Number(event.target.value))} />
-          </label>
-
-          <div className="cash-buttons">
-            <button type="button" onClick={() => setCashReceived(posTotal)}>พอดี</button>
-            <button type="button" onClick={() => setCashReceived(500)}>500</button>
-            <button type="button" onClick={() => setCashReceived(1000)}>1000</button>
-          </div>
-
-          <div className="change-box">
-            <span>เงินทอน</span>
-            <strong>{formatMoney(posChange)}</strong>
+            <footer className="pos-checkout-footer">
+              <p role="status">{posNotice}</p>
+              <div className="pos-checkout-actions">
+                {!isMobileViewport && (
+                  <button className="secondary-action" type="button" onClick={clearPosCart} disabled={isPrintingReceipt || !hasItems}>ล้างบิล</button>
+                )}
+                <button className="primary-action" type="button" onClick={completePosSale} disabled={isPrintingReceipt || !hasItems}>
+                  <Icon name={isPrintingReceipt ? 'hourglass_top' : 'picture_as_pdf'} />
+                  {isPrintingReceipt ? 'กำลังบันทึก...' : isMobileViewport ? 'ชำระเงิน / สั่งพิมพ์ที่คอม' : 'ชำระเงิน / สร้างใบเสร็จ'}
+                </button>
+              </div>
+            </footer>
           </div>
         </div>
-
-        <button
-          className="primary-action mobile-create-receipt"
-          type="button"
-          onClick={completePosSale}
-          disabled={isPrintingReceipt || posCart.length === 0}
-        >
-          <Icon name={isPrintingReceipt ? 'hourglass_top' : 'picture_as_pdf'} />
-          {isPrintingReceipt ? 'กำลังส่งคำสั่งพิมพ์...' : 'สร้างใบเสร็จ / สั่งพิมพ์ที่คอม'}
-        </button>
-      </section>
+      </dialog>
     );
   }
 
   function renderPosPage() {
     return (
-      <div className={`pos-layout ${mobileCheckoutOpen ? 'mobile-checkout-open' : ''}`}>
+      <div className={`pos-layout${isCompactPos ? ' compact-pos' : ''}`}>
         <section className="panel pos-workspace">
           <PanelTitle
             icon="barcode_scanner"
@@ -4045,15 +4122,15 @@ export default function App() {
 
           <div className="input-grid">
             <label className="field">
-              <span>แสกนสินค้า</span>
+              <span>สแกนสินค้า</span>
               <div className="input-with-button">
                 <input
                   ref={barcodeInputRef}
                   value={barcodeInput}
                   onChange={(event) => setBarcodeInput(event.target.value)}
                   onKeyDown={(event) => event.key === 'Enter' && scanProduct()}
-                  placeholder="ยิงบาร์โค้ดหรือพิมพ์ชื่อสินค้า"
-                  autoFocus
+                  placeholder={isCompactPos ? 'บาร์โค้ด / ชื่อสินค้า' : 'ยิงบาร์โค้ดหรือพิมพ์ชื่อสินค้า'}
+                  autoFocus={!isCompactPos}
                 />
                 <button type="button" onClick={scanProduct}><Icon name="add_shopping_cart" /> เพิ่ม</button>
                 <button className="mobile-camera-toggle" type="button" onClick={toggleMobileScanner}>
@@ -4067,6 +4144,7 @@ export default function App() {
               <span>Member ผ่านเบอร์มือถือ</span>
               <div className="input-with-button">
                 <input
+                  inputMode={isCompactPos ? 'numeric' : undefined}
                   value={memberPhone}
                   onChange={(event) => setMemberPhone(event.target.value)}
                   onKeyDown={(event) => event.key === 'Enter' && void lookupMember()}
@@ -4375,7 +4453,7 @@ export default function App() {
           </div>
         </section>
 
-        <aside className="panel summary-panel">
+        {!isCompactPos && <aside className="panel summary-panel">
           <PanelTitle icon="receipt_long" title="สรุปชำระเงิน" />
           <div className="summary-rows">
             <div><span>ยอดสินค้า</span><strong>{formatMoney(posSubtotal)}</strong></div>
@@ -4428,20 +4506,30 @@ export default function App() {
           <button className="secondary-action" type="button" onClick={clearPosCart}>
             <Icon name="backspace" /> ล้างบิล
           </button>
-        </aside>
+        </aside>}
 
-        {renderMobileReceiptCheckout()}
-
-        <button
-          className="mobile-checkout-overlay"
-          type="button"
-          disabled={posCart.length === 0}
-          onClick={() => setMobileCheckoutOpen(true)}
-        >
-          <span>{posCart.length} รายการ</span>
-          <strong>{formatMoney(posTotal)}</strong>
-          <b>ทำรายการ</b>
-        </button>
+        {isCompactPos && (
+          <>
+            <button
+              className="pos-cart-trigger"
+              type="button"
+              aria-haspopup="dialog"
+              aria-expanded={posCheckoutOpen}
+              aria-controls={posCheckoutOpen ? 'pos-checkout-dialog' : undefined}
+              onClick={(event) => {
+                event.currentTarget.focus({ preventScroll: true });
+                setMobileScannerOpen(false);
+                setPosCheckoutOpen(true);
+              }}
+            >
+              <span className="pos-cart-symbol"><Icon name="shopping_cart" /></span>
+              <span>ตะกร้า <small>{posCart.length} รายการ</small></span>
+              <strong>{formatMoney(posTotal)}</strong>
+              <Icon name="chevron_right" />
+            </button>
+            {posCheckoutOpen && renderPosCheckout()}
+          </>
+        )}
       </div>
     );
   }
