@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import type { ReactNode } from 'react';
+import type { FormEvent, ReactNode } from 'react';
 import axios from 'axios';
 import { BrowserMultiFormatReader } from '@zxing/browser';
 import type { IScannerControls } from '@zxing/browser';
@@ -8,10 +8,18 @@ import html2canvas from 'html2canvas';
 import { jsPDF } from 'jspdf';
 import { QRCodeSVG } from 'qrcode.react';
 import type { CartItem } from './types';
-import PosAmountKeypad from './components/PosAmountKeypad';
+import TransferPage from './components/TransferPage';
+import PurchaseOrders from './components/PurchaseOrders';
+import TaxDashboard from './components/TaxDashboard';
+import StockDocuments from './components/StockDocuments';
+import WarehouseStock from './components/WarehouseStock';
+import StoreSettingsPage from './components/StoreSettingsPage';
+import { baht, errorText } from './storeOperations';
+import type { StoreSettings, TransferTotals } from './storeOperations';
 import './App.css';
+import './operations.css';
 
-type View = 'POS' | 'GAS' | 'LOTTERY' | 'TOPUP' | 'HISTORY' | 'ANALYTICS' | 'STOCK' | 'STAFF' | 'CLOSING';
+type View = 'POS' | 'GAS' | 'LOTTERY' | 'TOPUP' | 'TRANSFER' | 'HISTORY' | 'ANALYTICS' | 'STOCK' | 'STAFF' | 'SETTINGS' | 'CLOSING';
 type PaymentMethod = 'เงินสด' | 'PromptPay';
 type PosAmountField = 'cash' | 'discount';
 type SaleChannel = 'POS' | 'GAS' | 'LOTTERY' | 'TOPUP';
@@ -160,7 +168,7 @@ interface AppSessionResponse {
   previousClosedSession?: AppSessionResponse | null;
 }
 
-type ClosingSection = 'POS' | 'GAS' | 'LOTTERY' | 'TOPUP' | 'STOCK';
+type ClosingSection = 'POS' | 'GAS' | 'LOTTERY' | 'TOPUP' | 'TRANSFER' | 'STOCK';
 
 interface ClosingCheck {
   section: ClosingSection;
@@ -178,6 +186,7 @@ interface ClosingSummary {
   checks: ClosingCheck[];
   readyToClose: boolean;
   sections: {
+    transfers?: TransferTotals;
     pos: {
       billCount: number;
       itemCount: number;
@@ -324,13 +333,6 @@ interface ChangePasswordResponse {
   user: AuthUser;
 }
 
-interface Member {
-  id: string;
-  name: string;
-  phone: string;
-  note: string;
-}
-
 interface StaffMember {
   id: string;
   name: string;
@@ -424,16 +426,22 @@ interface PendingGasReturn {
 }
 
 const viewMeta: Record<View, { icon: string; title: string; subtitle: string }> = {
-  POS: { icon: 'point_of_sale', title: 'POS', subtitle: 'ขายหน้าร้าน แสกนสินค้า สมาชิก ชำระเงิน' },
-  GAS: { icon: 'propane_tank', title: 'Gas', subtitle: 'ขายแก๊สและติดตามงานส่ง แยกเงินจาก POS' },
-  LOTTERY: { icon: 'confirmation_number', title: 'Lottery', subtitle: 'ขายหวยจากเลขในสต็อก' },
-  TOPUP: { icon: 'phone_iphone', title: 'Topup', subtitle: 'เติมเงินมือถือและติดตามรายการเบอร์' },
-  HISTORY: { icon: 'receipt_long', title: 'History', subtitle: 'ประวัติการขายทั้งหมดและรายละเอียดแต่ละรายการ' },
-  ANALYTICS: { icon: 'monitoring', title: 'Analytics', subtitle: 'ภาพรวมยอดขาย สต็อก และพนักงาน' },
-  STOCK: { icon: 'inventory_2', title: 'Stock', subtitle: 'จัดการสินค้าและบันทึกการปรับสต็อก' },
-  STAFF: { icon: 'badge', title: 'Staff', subtitle: 'ข้อมูลพนักงานในร้าน' },
-  CLOSING: { icon: 'lock_clock', title: 'Close Shop', subtitle: 'ตรวจยอดประจำวัน ยืนยันแต่ละหมวด และปิดรอบขาย' },
+  POS: { icon: 'point_of_sale', title: 'ขายหน้าร้าน', subtitle: 'สแกนสินค้าและคิดเงิน' },
+  TRANSFER: { icon: 'currency_exchange', title: 'รับโอนเงิน', subtitle: 'บันทึกเงินสดที่รับเพื่อโอนให้ลูกค้า' },
+  GAS: { icon: 'propane_tank', title: 'ขายแก๊ส', subtitle: 'จัดคิวส่งและติดตามถังคืน' },
+  LOTTERY: { icon: 'confirmation_number', title: 'สลาก', subtitle: 'ขายสลากจากเลขในสต็อก' },
+  TOPUP: { icon: 'phone_iphone', title: 'เติมเงิน', subtitle: 'บันทึกและติดตามการเติมเงินมือถือ' },
+  HISTORY: { icon: 'receipt_long', title: 'ประวัติขาย', subtitle: 'ค้นบิลและตรวจรายละเอียดการขาย' },
+  ANALYTICS: { icon: 'monitoring', title: 'แดชบอร์ด', subtitle: 'ภาพรวมร้านและรายงานประจำเดือน' },
+  STOCK: { icon: 'inventory_2', title: 'สต็อก', subtitle: 'จัดการสินค้าและใบสั่งซื้อ' },
+  STAFF: { icon: 'badge', title: 'พนักงาน', subtitle: 'จัดการพนักงานและบัญชีผู้ใช้' },
+  SETTINGS: { icon: 'settings', title: 'ตั้งค่า', subtitle: 'จัดการค่าเริ่มต้นหน้าร้าน' },
+  CLOSING: { icon: 'lock_clock', title: 'รอบขาย', subtitle: 'เปิดร้าน ตรวจยอด และปิดร้าน' },
 };
+const navigationGroups: { label: string; views: Exclude<View, 'CLOSING'>[] }[] = [
+  { label: 'หน้าร้าน', views: ['POS', 'TRANSFER', 'GAS', 'LOTTERY', 'TOPUP'] },
+  { label: 'จัดการร้าน', views: ['HISTORY', 'ANALYTICS', 'STOCK', 'STAFF', 'SETTINGS'] },
+];
 
 const saleChannelMeta: Record<SaleChannel, { icon: string; label: string; className: string }> = {
   POS: { icon: 'point_of_sale', label: 'POS', className: 'pos' },
@@ -452,10 +460,10 @@ const closingSectionMeta: Record<ClosingSection, { icon: string; label: string }
   GAS: { icon: 'propane_tank', label: 'แก๊ส' },
   LOTTERY: { icon: 'confirmation_number', label: 'หวย' },
   TOPUP: { icon: 'phone_iphone', label: 'เติมเงิน' },
+  TRANSFER: { icon: 'currency_exchange', label: 'รับโอนเงิน' },
   STOCK: { icon: 'inventory_2', label: 'สต็อกประจำวัน' },
 };
-const closingSections: ClosingSection[] = ['POS', 'GAS', 'LOTTERY', 'TOPUP', 'STOCK'];
-const todayLabel = new Intl.DateTimeFormat('th-TH', { dateStyle: 'medium' }).format(new Date());
+const todayLabel = new Intl.DateTimeFormat('th-TH', { dateStyle: 'medium', timeZone: 'Asia/Bangkok' }).format(new Date());
 const storageKeys = {
   appSessionId: 'tingkum.appSessionId.v1',
   deviceId: 'tingkum.deviceId.v1',
@@ -469,13 +477,14 @@ function getApiBaseUrl() {
     return configuredApiBaseUrl.replace(/\/$/, '');
   }
 
+  const apiPort = import.meta.env.VITE_API_PORT || '5000';
   if (typeof window === 'undefined') {
-    return 'http://localhost:5000';
+    return `http://localhost:${apiPort}`;
   }
 
   const host = window.location.hostname;
   const apiHost = host && host !== '127.0.0.1' ? host : 'localhost';
-  return `http://${apiHost}:5000`;
+  return `http://${apiHost}:${apiPort}`;
 }
 
 function createDailySessionId(date = new Date()) {
@@ -1109,10 +1118,7 @@ function normalizeCartItem(item: CartItem): CartItem {
 }
 
 function dateInputValue(date: Date) {
-  const year = date.getFullYear();
-  const month = String(date.getMonth() + 1).padStart(2, '0');
-  const day = String(date.getDate()).padStart(2, '0');
-  return `${year}-${month}-${day}`;
+  return new Intl.DateTimeFormat('sv-SE', { timeZone: 'Asia/Bangkok', year: 'numeric', month: '2-digit', day: '2-digit' }).format(date);
 }
 
 function currentDateInput() {
@@ -1128,7 +1134,7 @@ function currentMonthInput() {
 }
 
 function currentYearInput() {
-  return String(new Date().getFullYear());
+  return currentDateInput().slice(0, 4);
 }
 
 function escapeXml(value: unknown) {
@@ -1202,7 +1208,6 @@ export default function App() {
   const pageScrollRef = useRef<HTMLElement | null>(null);
   const barcodeInputRef = useRef<HTMLInputElement>(null);
   const posCheckoutRef = useRef<HTMLDialogElement>(null);
-  const posAmountTriggerRef = useRef<HTMLButtonElement>(null);
   const scannerVideoRef = useRef<HTMLVideoElement>(null);
   const scannerStreamRef = useRef<MediaStream | null>(null);
   const scannerFrameRef = useRef<number | null>(null);
@@ -1210,7 +1215,7 @@ export default function App() {
   const requestedCameraDeviceIdRef = useRef('');
   const activeCameraDeviceIdRef = useRef('');
   const handledPrintRequestIdsRef = useRef<Set<number>>(new Set());
-  const previousGasSelectedCountRef = useRef(0);
+
   const gasKeyboardScrollTopRef = useRef<number | null>(null);
   const [authSession, setAuthSession] = useState<AuthSession | null>(() => readAuthSession());
   const [loginForm, setLoginForm] = useState({ username: 'owner', password: '' });
@@ -1228,6 +1233,11 @@ export default function App() {
   const [isCompactPos, setIsCompactPos] = useState(() =>
     typeof window !== 'undefined' && window.matchMedia(compactPosQuery).matches,
   );
+  const [checkoutStep, setCheckoutStep] = useState(0);
+  const [amountBuffer, setAmountBuffer] = useState('');
+  const [gasStep, setGasStep] = useState<'selection' | 'delivery'>('selection');
+  const [lotteryTab, setLotteryTab] = useState<'keypad' | 'map'>('keypad');
+  const [gasBrand, setGasBrand] = useState('');
   const [posCheckoutOpen, setPosCheckoutOpen] = useState(false);
   const [posAmountField, setPosAmountField] = useState<PosAmountField | null>(null);
   const [mobileScannerOpen, setMobileScannerOpen] = useState(false);
@@ -1238,6 +1248,12 @@ export default function App() {
   const [activeCameraLabel, setActiveCameraLabel] = useState('');
   const [sessionQrOpen, setSessionQrOpen] = useState(false);
   const [currentView, setCurrentView] = useState<View>('POS');
+  const [dashboardTab, setDashboardTab] = useState<'sales' | 'tax'>('sales');
+  const [stockTab, setStockTab] = useState<'products' | 'orders' | 'issue' | 'count'>('products');
+  const [storeSettings, setStoreSettings] = useState<StoreSettings>();
+  const [productEdit, setProductEdit] = useState<{ id: number; name: string; barcode: string; price: string }>();
+  const [productEditBusy, setProductEditBusy] = useState(false);
+  const [productEditError, setProductEditError] = useState('');
   const [apiStatus, setApiStatus] = useState('กำลังโหลดสินค้าใน tingkum_db');
   const [appSession, setAppSession] = useState<AppSessionResponse | null>(null);
   const [closingSummary, setClosingSummary] = useState<ClosingSummary | null>(null);
@@ -1249,14 +1265,8 @@ export default function App() {
 
   const [posCart, setPosCart] = useState<CartItem[]>([]);
   const [barcodeInput, setBarcodeInput] = useState('');
-  const [memberPhone, setMemberPhone] = useState('');
-  const [currentMember, setCurrentMember] = useState<Member | null>(null);
-  const [memberCreateOpen, setMemberCreateOpen] = useState(false);
-  const [pendingMemberPhone, setPendingMemberPhone] = useState('');
-  const [memberCreateDraft, setMemberCreateDraft] = useState({ name: '', note: '' });
-  const [isCreatingMember, setIsCreatingMember] = useState(false);
   const [cashierId, setCashierId] = useState('');
-  const [posPayment, setPosPayment] = useState<PaymentMethod>('เงินสด');
+  const [posPayment] = useState<PaymentMethod>('เงินสด');
   const [cashReceived, setCashReceived] = useState(0);
   const [billDiscount, setBillDiscount] = useState(0);
   const [posNotice, setPosNotice] = useState('พร้อมขาย');
@@ -1293,7 +1303,8 @@ export default function App() {
   const [gasNotice, setGasNotice] = useState('กำลังโหลดข้อมูลแก๊สจาก tingkum_db');
   const [gasReturnedTankQuantity, setGasReturnedTankQuantity] = useState(0);
   const [gasPaid, setGasPaid] = useState(true);
-  const [gasDeliveryFee, setGasDeliveryFee] = useState(20);
+  const [gasFeeOverride, setGasDeliveryFee] = useState<number | null>(null);
+  const gasDeliveryFee = gasFeeOverride ?? (storeSettings?.gasDeliveryFee ?? 2000) / 100;
   const [gasPendingReturnQuantities, setGasPendingReturnQuantities] = useState<Record<string, number>>({});
   const [gasItemDraft, setGasItemDraft] = useState({
     id: '',
@@ -1315,11 +1326,14 @@ export default function App() {
   const [lotteryPayment, setLotteryPayment] = useState<PaymentMethod>('เงินสด');
   const [lotteryReceived, setLotteryReceived] = useState(0);
   const [lotteryNotice, setLotteryNotice] = useState('ค้นหาเลข 6 หลักจากสต็อก');
+  const [receivingBook, setReceivingBook] = useState(false);
   const [lotteryStockDraft, setLotteryStockDraft] = useState({ number: '', quantity: '1', price: '100' });
   const [lotteryStockNotice, setLotteryStockNotice] = useState('เพิ่มเลขหวยแบบ manual ก่อนเชื่อมระบบสต็อกหวยจริง');
+  const [topupTab, setTopupTab] = useState<'entry' | 'orders'>('entry');
   const [topupProvider, setTopupProvider] = useState<MobileTopupProvider>('AIS');
   const [topupPhone, setTopupPhone] = useState('');
-  const [topupAmount, setTopupAmount] = useState('100');
+  const [topupAmountOverride, setTopupAmount] = useState<string | null>(null);
+  const topupAmount = topupAmountOverride ?? String((storeSettings?.topupAmount ?? 10000) / 100);
   const [topupOrders, setTopupOrders] = useState<MobileTopupOrder[]>([]);
   const [topupNotice, setTopupNotice] = useState('เลือกค่าย กรอกเบอร์ และจำนวนเงินก่อนยืนยันรายการ');
 
@@ -1350,7 +1364,7 @@ export default function App() {
   const allowedViews = useMemo(
     () => (Object.keys(viewMeta) as View[])
       .filter((view) => view !== 'CLOSING')
-      .filter((view) => isOwner || (view !== 'STOCK' && view !== 'STAFF')),
+      .filter((view) => isOwner || (view !== 'STOCK' && view !== 'STAFF' && view !== 'SETTINGS')),
     [isOwner],
   );
   const refreshClosingSummary = useCallback(async (targetSessionId = scanSessionId) => {
@@ -1395,11 +1409,19 @@ export default function App() {
   }, [authSession]);
 
   useEffect(() => {
+    if (!authSession || (currentView !== 'GAS' && currentView !== 'TOPUP')) return;
+    const controller = new AbortController();
+    axios.get<StoreSettings>(`${API_BASE_URL}/api/store-settings`, { signal: controller.signal })
+      .then(({ data }) => setStoreSettings(data)).catch(() => {});
+    return () => controller.abort();
+  }, [authSession, currentView]);
+
+  useEffect(() => {
     if (!authSession || isOwner) {
       return;
     }
 
-    if (currentView === 'STOCK' || currentView === 'STAFF') {
+    if (currentView === 'STOCK' || currentView === 'STAFF' || currentView === 'SETTINGS') {
       setCurrentView('POS');
     }
     setGasPaid(false);
@@ -1429,7 +1451,7 @@ export default function App() {
             setPosAmountField(null);
           }
           setCurrentView((view) => {
-            if (!nextIsOpen && view !== 'CLOSING') {
+            if (!nextIsOpen && ['POS', 'GAS', 'LOTTERY', 'TOPUP'].includes(view)) {
               return 'CLOSING';
             }
             if (nextIsOpen && view === 'CLOSING' && !isOwner) {
@@ -1616,8 +1638,6 @@ export default function App() {
     const syncViewport = () => {
       setIsCompactPos(mediaQuery.matches);
       if (!mediaQuery.matches) {
-        setPosCheckoutOpen(false);
-        setPosAmountField(null);
         setMobileScannerOpen(false);
       }
     };
@@ -1861,10 +1881,6 @@ export default function App() {
     if (currentView !== 'POS') {
       setMobileScannerOpen(false);
       setSessionQrOpen(false);
-      setMemberCreateOpen(false);
-      setPendingMemberPhone('');
-      setMemberCreateDraft({ name: '', note: '' });
-      setIsCreatingMember(false);
     }
   }, [currentView]);
 
@@ -1924,13 +1940,7 @@ export default function App() {
   }, [activeProductRegistrationRequest?.id]);
 
   useEffect(() => {
-    const previousSelectedCount = previousGasSelectedCountRef.current;
-    previousGasSelectedCountRef.current = gasSelectedCount;
-
-    setGasReturnedTankQuantity((previous) => {
-      const wasReturningAll = previousSelectedCount === 0 || previous === previousSelectedCount;
-      return wasReturningAll ? gasSelectedCount : Math.min(previous, gasSelectedCount);
-    });
+    setGasReturnedTankQuantity(previous => Math.min(previous, gasSelectedCount));
   }, [gasSelectedCount]);
 
   const lotterySubtotal = lotteryCart.reduce((sum, item) => sum + item.price * item.quantity, 0);
@@ -2008,7 +2018,7 @@ export default function App() {
     analyticsRevenueSales.forEach((sale) => {
       sale.items.forEach((item) => {
         const matchedProduct = stockItems.find((product) =>
-          product.barcode === item.barcode || product.name === item.name,
+          (item.barcode && product.barcode === item.barcode) || product.name === item.name,
         );
         const category = sale.channel === 'POS'
           ? matchedProduct?.category ?? 'สินค้าอื่น'
@@ -2126,7 +2136,6 @@ export default function App() {
     setPosCart([]);
     setLotteryCart([]);
     setSalesHistory([]);
-    setCurrentMember(null);
     setCurrentView('POS');
   }
 
@@ -2454,13 +2463,6 @@ export default function App() {
 
   function scanProduct() {
     void handleBarcodeValue(barcodeInput, 'desktop');
-  }
-
-  function closeMemberCreateDialog() {
-    setMemberCreateOpen(false);
-    setPendingMemberPhone('');
-    setMemberCreateDraft({ name: '', note: '' });
-    setIsCreatingMember(false);
   }
 
   async function sendScannerBarcode(value = scannerBarcode) {
@@ -2805,67 +2807,6 @@ export default function App() {
     }
   }
 
-  async function lookupMember() {
-    const normalizedPhone = memberPhone.replace(/\D/g, '');
-    if (!/^0\d{9}$/.test(normalizedPhone)) {
-      setCurrentMember(null);
-      setPosNotice('กรอกเบอร์มือถือ 10 หลักเพื่อค้นหา member');
-      return;
-    }
-
-    try {
-      const response = await axios.get<Member[]>(`${API_BASE_URL}/api/members?phone=${encodeURIComponent(normalizedPhone)}`);
-      const member = response.data[0] ?? null;
-      setCurrentMember(member);
-      if (member) {
-        closeMemberCreateDialog();
-        setPosNotice(`พบสมาชิก ${member.name}`);
-        return;
-      }
-
-      setPendingMemberPhone(normalizedPhone);
-      setMemberCreateDraft({ name: '', note: '' });
-      setMemberCreateOpen(isOwner);
-      setPosNotice(isOwner ? `ไม่พบสมาชิกเบอร์ ${normalizedPhone}` : 'ไม่พบสมาชิก เบอร์นี้ขายแบบลูกค้าทั่วไปได้');
-    } catch {
-      setCurrentMember(null);
-      setPosNotice('ค้นหา member จาก tingkum_db ไม่สำเร็จ');
-    }
-  }
-
-  async function createMemberFromPhone() {
-    if (!isOwner) {
-      setPosNotice('เฉพาะ owner เท่านั้นที่สร้าง member ได้');
-      return;
-    }
-
-    const phone = pendingMemberPhone || memberPhone.replace(/\D/g, '');
-    if (!/^0\d{9}$/.test(phone)) {
-      setPosNotice('กรอกเบอร์มือถือ 10 หลักก่อนสร้าง member');
-      return;
-    }
-
-    const name = memberCreateDraft.name.trim();
-    if (!name) {
-      setPosNotice('กรอกชื่อลูกค้าก่อนสร้าง member');
-      return;
-    }
-    const note = memberCreateDraft.note.trim();
-
-    try {
-      setIsCreatingMember(true);
-      const response = await axios.post<Member>(`${API_BASE_URL}/api/members`, { name, phone, note });
-      setCurrentMember(response.data);
-      setMemberPhone(response.data.phone);
-      closeMemberCreateDialog();
-      setPosNotice(`สร้าง member ${response.data.name} แล้ว`);
-    } catch {
-      setPosNotice('สร้าง member ไม่สำเร็จ');
-    } finally {
-      setIsCreatingMember(false);
-    }
-  }
-
   async function updateCartQuantity(id: string, delta: number) {
     if (!requireShopOpen(setPosNotice)) {
       return;
@@ -2949,11 +2890,6 @@ export default function App() {
     setPosAmountField(null);
   }
 
-  function closePosAmountKeypad() {
-    setPosAmountField(null);
-    window.requestAnimationFrame(() => posAmountTriggerRef.current?.focus());
-  }
-
   async function completePosSale() {
     if (!requireShopOpen(setPosNotice)) {
       return;
@@ -2987,11 +2923,11 @@ export default function App() {
         `${API_BASE_URL}/api/app-sessions/${encodeURIComponent(scanSessionId)}/pos/checkout`,
         {
           cashierName: cashier?.name ?? 'ไม่ระบุพนักงาน',
-          customerName: currentMember?.name ?? 'ลูกค้าทั่วไป',
+          customerName: 'ลูกค้าทั่วไป',
           paymentMethod: posPayment,
           billDiscount,
           cashReceived: posPayment === 'เงินสด' ? cashReceived : posTotal,
-          note: currentMember?.phone ? `สมาชิก ${currentMember.phone}` : 'ขายหน้าร้าน',
+          note: 'ขายหน้าร้าน',
           requestedBy: isMobileViewport ? 'mobile' : deviceId,
         },
       );
@@ -3082,8 +3018,8 @@ export default function App() {
       return;
     }
 
-    if (!gasCustomer.name.trim() || !gasCustomer.phone.trim() || !gasCustomer.address.trim()) {
-      setGasNotice('กรอกชื่อ เบอร์โทร และที่อยู่สำหรับส่งแก๊ส');
+    if (!gasCustomer.name.trim() || !gasCustomer.address.trim()) {
+      setGasNotice('กรอกชื่อและที่อยู่สำหรับส่งแก๊ส');
       return;
     }
 
@@ -3100,6 +3036,7 @@ export default function App() {
       const response = await axios.post<{ state: GasStateResponse; sale: ApiSaleRecord }>(
         `${API_BASE_URL}/api/app-sessions/${encodeURIComponent(scanSessionId)}/gas/jobs`,
         {
+          brand: gasBrand,
           customerName: gasCustomer.name.trim(),
           phone: gasCustomer.phone.trim(),
           address: gasCustomer.address.trim(),
@@ -3114,8 +3051,11 @@ export default function App() {
       const saleRecord = normalizeSaleRecord(response.data.sale);
       setSalesHistory((previous) => [saleRecord, ...previous.filter((sale) => sale.id !== saleRecord.id)]);
       setSelectedSaleId(saleRecord.id);
+      setGasStep('selection');
+      setGasBrand('');
       setGasQuantities({});
       setGasCustomer({ name: '', phone: '', address: '' });
+      setGasDeliveryFee(null);
       setGasReturnedTankQuantity(0);
       setGasPaid(isOwner);
       setGasNotice(`สร้างงาน ${saleRecord.id} แล้ว`);
@@ -3453,7 +3393,7 @@ export default function App() {
       const order = normalizeTopupOrder(response.data);
       setTopupOrders((previous) => [order, ...previous.filter((item) => item.id !== order.id)]);
       setTopupPhone('');
-      setTopupAmount(String(amount));
+      setTopupAmount(null);
       setTopupNotice(`เพิ่มรายการ ${topupProvider} ${phone} ${formatMoney(amount)} แล้ว`);
     } catch {
       setTopupNotice('เพิ่มรายการเติมเงินลง tingkum_db ไม่สำเร็จ');
@@ -3621,6 +3561,24 @@ export default function App() {
     }
   }
 
+  async function saveProductDetails(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!productEdit || productEditBusy) return;
+    setProductEditBusy(true);
+    setProductEditError('');
+    try {
+      const { data } = await axios.patch<ApiProduct>(`${API_BASE_URL}/api/products/${productEdit.id}`, {
+        barcode: productEdit.barcode.trim(), price: Number(productEdit.price || 0),
+      });
+      setStockItems((items) => items.map((item) => item.id === data.id ? normalizeProduct(data) : item));
+      setProductEdit(undefined);
+    } catch (error) {
+      setProductEditError(axios.isAxiosError(error) && error.response?.status === 409 ? 'บาร์โค้ดนี้มีสินค้าใช้อยู่แล้ว' : errorText(error));
+    } finally {
+      setProductEditBusy(false);
+    }
+  }
+
   async function createGasStockItem() {
     if (!isOwner) {
       setApiStatus('เฉพาะ owner เท่านั้นที่เพิ่มรายการแก๊สได้');
@@ -3726,6 +3684,17 @@ export default function App() {
     setGasCorrectionReason('');
   }
 
+  async function receiveBook() {
+    if (receivingBook) return;
+    setReceivingBook(true);
+    try {
+      const {data} = await axios.post(`${API_BASE_URL}/api/lottery/books`, {quantity: Number(lotteryStockDraft.quantity), price: Number(lotteryStockDraft.price)});
+      setLotteryStockNotice(`รับสลากเข้าแล้ว ${data.total} ใบ`);
+      await Promise.all([refreshLotteryTickets(), refreshStockLog()]);
+    } catch { setLotteryStockNotice('รับเล่มไม่สำเร็จ ตรวจจำนวนและราคาอีกครั้ง'); }
+    finally { setReceivingBook(false); }
+  }
+
   async function addManualLotteryStock() {
     if (!isOwner) {
       setLotteryStockNotice('เฉพาะ owner เท่านั้นที่จัดการ stock หวยได้');
@@ -3770,7 +3739,7 @@ export default function App() {
       return;
     }
 
-    const ticket = lotteryTickets.find((item) => item.number === number || String(item.id) === number);
+    const ticket = lotteryTickets.find((item) => item.number === number);
     if (!ticket) {
       return;
     }
@@ -3995,108 +3964,40 @@ export default function App() {
   }
 
   function renderPosCheckout() {
-    const hasItems = posCart.length > 0;
-
-    return (
-      <dialog
-        className="pos-checkout-dialog"
-        id="pos-checkout-dialog"
-        aria-labelledby="pos-checkout-title"
-        ref={(dialog) => {
-          posCheckoutRef.current = dialog;
-          if (dialog && !dialog.open) dialog.showModal();
-        }}
-        onCancel={(event) => {
-          event.preventDefault();
-          if (posAmountField) closePosAmountKeypad();
-          else closePosCheckout();
-        }}
-        onClick={(event) => {
-          if (event.target === event.currentTarget) closePosCheckout();
-        }}
-      >
-        <div className="pos-checkout-sheet">
-          <header className="pos-checkout-header">
-            <h2 id="pos-checkout-title"><Icon name="receipt_long" /> สรุปชำระเงิน</h2>
-            <button type="button" className="icon-button" aria-label="ปิดสรุปชำระเงิน" onClick={closePosCheckout}>
-              <Icon name="close" />
-            </button>
-            <div className="pos-checkout-total"><span>ยอดที่ต้องชำระ</span><strong>{formatMoney(posTotal)}</strong></div>
-          </header>
-
-          {posAmountField && (
-            <PosAmountKeypad
-              key={posAmountField}
-              label={posAmountField === 'cash' ? 'รับเงินสด' : 'ส่วนลดท้ายบิล'}
-              value={posAmountField === 'cash' ? cashReceived : billDiscount}
-              onCancel={closePosAmountKeypad}
-              onConfirm={(amount) => {
-                if (posAmountField === 'cash') setCashReceived(amount);
-                else setBillDiscount(amount);
-                closePosAmountKeypad();
-              }}
-            />
-          )}
-
-          <div className="pos-checkout-details" hidden={Boolean(posAmountField)}>
-            <div className="pos-checkout-fields">
-              {hasItems ? (
-                <details className="pos-checkout-items">
-                  <summary><span>สินค้า {posCart.length} รายการ</span><strong>{formatMoney(posSubtotal)}</strong></summary>
-                  <ul>
-                    {posCart.map((item) => (
-                      <li key={item.id}>
-                        <span>{item.name} × {item.quantity}</span>
-                        <strong>{formatMoney(item.price * item.quantity - item.discount)}</strong>
-                      </li>
-                    ))}
-                  </ul>
-                </details>
-              ) : <EmptyState text="ยังไม่มีสินค้าในตะกร้า" />}
-
-              <label className="pos-checkout-cashier">
-                <span>พนักงานรับขาย</span>
-                <select value={cashierId} disabled={isPrintingReceipt} onChange={(event) => setCashierId(event.target.value)}>
-                  {activeStaff.map((staff) => <option key={staff.id} value={staff.id}>{staff.name} - {staff.role}</option>)}
-                </select>
-              </label>
-
-              <button className="pos-amount-field" type="button" disabled={!hasItems || isPrintingReceipt} onClick={(event) => {
-                posAmountTriggerRef.current = event.currentTarget;
-                setPosAmountField('discount');
-              }}>
-                <span>ส่วนลดท้ายบิล</span><strong>{formatMoney(billDiscount)}</strong><Icon name="dialpad" />
-              </button>
-
-              <div className="pos-cash-entry">
-                <button className="pos-amount-field" type="button" disabled={!hasItems || isPrintingReceipt} onClick={(event) => {
-                  posAmountTriggerRef.current = event.currentTarget;
-                  setPosAmountField('cash');
-                }}>
-                  <span>รับเงินสด</span><strong>{formatMoney(cashReceived)}</strong><Icon name="dialpad" />
-                </button>
-                <button className="secondary-action" type="button" disabled={!hasItems || isPrintingReceipt} onClick={() => setCashReceived(posTotal)}>พอดี</button>
-              </div>
-
-              <div className="change-box pos-checkout-change"><span>เงินทอน</span><strong>{formatMoney(posChange)}</strong></div>
-            </div>
-
-            <footer className="pos-checkout-footer">
-              <p role="status">{posNotice}</p>
-              <div className="pos-checkout-actions">
-                {!isMobileViewport && (
-                  <button className="secondary-action" type="button" onClick={clearPosCart} disabled={isPrintingReceipt || !hasItems}>ล้างบิล</button>
-                )}
-                <button className="primary-action" type="button" onClick={completePosSale} disabled={isPrintingReceipt || !hasItems}>
-                  <Icon name={isPrintingReceipt ? 'hourglass_top' : 'picture_as_pdf'} />
-                  {isPrintingReceipt ? 'กำลังบันทึก...' : isMobileViewport ? 'ชำระเงิน / สั่งพิมพ์ที่คอม' : 'ชำระเงิน / สร้างใบเสร็จ'}
-                </button>
-              </div>
-            </footer>
-          </div>
-        </div>
-      </dialog>
-    );
+    const titles = ['รายการสินค้า', 'เลือกคนขาย', 'รับเงินและเงินทอน', 'ชำระเงินและพิมพ์ใบเสร็จ'];
+    function back() {
+      if (isPrintingReceipt) return;
+      if (checkoutStep === 0) closePosCheckout();
+      else setCheckoutStep(checkoutStep - 1);
+    }
+    function chooseAmount(field: PosAmountField) {
+      setPosAmountField(field);
+      setAmountBuffer('');
+    }
+    function keypress(key: string) {
+      const next = key === 'ลบ' ? amountBuffer.slice(0,-1) : amountBuffer + key;
+      if (!/^\d{0,8}(?:\.\d{0,2})?$/.test(next)) return;
+      setAmountBuffer(next);
+      (posAmountField === 'discount' ? setBillDiscount : setCashReceived)(Number(next) || 0);
+    }
+    const canAdvance = posCart.length > 0 && (checkoutStep < 1 || !!cashierId) && (checkoutStep < 2 || cashReceived >= posTotal && billDiscount <= posSubtotal);
+    return <dialog className="pos-checkout-dialog shop-wizard" id="pos-checkout-dialog" aria-labelledby="pos-checkout-title"
+      ref={dialog => {posCheckoutRef.current = dialog; if (dialog && !dialog.open) dialog.showModal();}}
+      onCancel={event => {event.preventDefault(); back();}}>
+      <header><small>ชำระเงิน · {checkoutStep + 1} / 4</small><h2 id="pos-checkout-title">{titles[checkoutStep]}</h2></header>
+      {checkoutStep === 0 && <div>{posCart.map(item => <div className="bill-line" key={item.id}><span>{item.name} × {item.quantity}</span><b>{formatMoney(item.price * item.quantity - item.discount)}</b></div>)}<strong>รวม {formatMoney(posSubtotal)}</strong></div>}
+      {checkoutStep === 1 && <div className="touch-options">{activeStaff.map(staff => <button key={staff.id} aria-pressed={cashierId === staff.id} onClick={() => setCashierId(staff.id)}>{staff.name}</button>)}</div>}
+      {checkoutStep === 2 && <div className="tender-grid"><div className="money-fields">
+        <button aria-pressed={posAmountField === 'discount'} onClick={() => chooseAmount('discount')}>ส่วนลดท้ายบิล <b>{formatMoney(billDiscount)}</b></button>
+        <div>ยอดที่ต้องชำระ <strong>{formatMoney(posTotal)}</strong></div>
+        <button aria-pressed={posAmountField !== 'discount'} onClick={() => chooseAmount('cash')}>รับเงินมา <b>{formatMoney(cashReceived)}</b></button>
+        <button onClick={() => {setCashReceived(posTotal);chooseAmount('cash');}}>รับพอดี</button>
+        <div>{cashReceived < posTotal ? 'ยังขาด' : 'เงินทอน'} <strong>{formatMoney(Math.abs(cashReceived-posTotal))}</strong></div>
+        {billDiscount > posSubtotal && <p>ส่วนลดเกินยอดสินค้า</p>}</div>
+        <div className="number-pad"><output className="keypad-readout">{posAmountField === 'discount' ? 'ส่วนลด' : 'รับเงิน'} · {amountBuffer || (posAmountField === 'discount' ? billDiscount : cashReceived)}</output>{['7','8','9','4','5','6','1','2','3','.','0','ลบ'].map(key => <button key={key} onClick={() => keypress(key)}>{key}</button>)}</div></div>}
+      {checkoutStep === 3 && <div className="money-fields"><div>คนขาย <b>{activeStaff.find(staff => staff.id === cashierId)?.name}</b></div><div>ยอดสุทธิ <strong>{formatMoney(posTotal)}</strong></div><div>รับเงิน <b>{formatMoney(cashReceived)}</b></div><div>เงินทอน <strong>{formatMoney(posChange)}</strong></div></div>}
+      <p role="status">{posNotice}</p><footer><button disabled={isPrintingReceipt} onClick={back}>ย้อนกลับ</button><button className="primary-action" disabled={!canAdvance || isPrintingReceipt} onClick={() => checkoutStep === 3 ? void completePosSale() : setCheckoutStep(checkoutStep + 1)}>{['ยืนยันรายการ','ถัดไป','ถัดไป',isPrintingReceipt ? 'กำลังบันทึก…' : 'ชำระเงิน / พิมพ์ใบเสร็จ'][checkoutStep]}</button></footer>
+    </dialog>;
   }
 
   function renderPosPage() {
@@ -4140,19 +4041,7 @@ export default function App() {
               </div>
             </label>
 
-            <label className="field">
-              <span>Member ผ่านเบอร์มือถือ</span>
-              <div className="input-with-button">
-                <input
-                  inputMode={isCompactPos ? 'numeric' : undefined}
-                  value={memberPhone}
-                  onChange={(event) => setMemberPhone(event.target.value)}
-                  onKeyDown={(event) => event.key === 'Enter' && void lookupMember()}
-                  placeholder="0812345678"
-                />
-                <button type="button" onClick={lookupMember}><Icon name="person_search" /> ค้นหา</button>
-              </div>
-            </label>
+
           </div>
 
           <div className={`mobile-camera-panel ${mobileScannerOpen ? 'open' : ''}`}>
@@ -4234,79 +4123,6 @@ export default function App() {
               </div>
             </div>
           )}
-
-          {memberCreateOpen && (
-            <div className="modal-backdrop" role="presentation" onClick={closeMemberCreateDialog}>
-              <section
-                className="password-panel member-create-panel"
-                role="dialog"
-                aria-modal="true"
-                aria-labelledby="member-create-title"
-                onClick={(event) => event.stopPropagation()}
-              >
-                <div className="modal-head">
-                  <div>
-                    <span className="badge warning">ไม่พบสมาชิก</span>
-                    <h2 id="member-create-title">สร้าง member ใหม่?</h2>
-                    <p>เบอร์ {pendingMemberPhone} ยังไม่มีในระบบ</p>
-                  </div>
-                  <button className="icon-button" type="button" title="ปิด" onClick={closeMemberCreateDialog}>
-                    <Icon name="close" />
-                  </button>
-                </div>
-
-                <div className="form-stack">
-                  <label className="field">
-                    <span>ชื่อลูกค้า</span>
-                    <input
-                      value={memberCreateDraft.name}
-                      onChange={(event) => setMemberCreateDraft({ ...memberCreateDraft, name: event.target.value })}
-                      onKeyDown={(event) => event.key === 'Enter' && void createMemberFromPhone()}
-                      autoFocus
-                    />
-                  </label>
-                  <label className="field">
-                    <span>หมายเหตุ</span>
-                    <input
-                      value={memberCreateDraft.note}
-                      onChange={(event) => setMemberCreateDraft({ ...memberCreateDraft, note: event.target.value })}
-                      onKeyDown={(event) => event.key === 'Enter' && void createMemberFromPhone()}
-                      placeholder="เช่น ลูกค้าประจำ หรือที่อยู่ย่อ"
-                    />
-                  </label>
-                </div>
-
-                <div className="member-create-actions">
-                  <button className="secondary-action" type="button" onClick={closeMemberCreateDialog}>
-                    ใช้ลูกค้าทั่วไป
-                  </button>
-                  <button
-                    className="primary-action"
-                    type="button"
-                    onClick={() => void createMemberFromPhone()}
-                    disabled={isCreatingMember}
-                  >
-                    <Icon name={isCreatingMember ? 'hourglass_top' : 'person_add'} />
-                    {isCreatingMember ? 'กำลังสร้าง...' : 'สร้าง member'}
-                  </button>
-                </div>
-              </section>
-            </div>
-          )}
-
-          <div className="context-row">
-            <div className="mini-card">
-              <span className="label">ลูกค้า</span>
-              <strong>{currentMember?.name ?? 'ลูกค้าทั่วไป'}</strong>
-              <small>{currentMember?.note ?? 'ยังไม่ผูกเบอร์สมาชิก'}</small>
-            </div>
-            <label className="field compact">
-              <span>พนักงานรับขาย</span>
-              <select value={cashierId} onChange={(event) => setCashierId(event.target.value)}>
-                {activeStaff.map((staff) => <option key={staff.id} value={staff.id}>{staff.name} - {staff.role}</option>)}
-              </select>
-            </label>
-          </div>
 
           {unknownBarcode && (
             <div className="unknown-product-panel">
@@ -4453,63 +4269,8 @@ export default function App() {
           </div>
         </section>
 
-        {!isCompactPos && <aside className="panel summary-panel">
-          <PanelTitle icon="receipt_long" title="สรุปชำระเงิน" />
-          <div className="summary-rows">
-            <div><span>ยอดสินค้า</span><strong>{formatMoney(posSubtotal)}</strong></div>
-            <label>
-              <span>ส่วนลดท้ายบิล</span>
-              <input type="number" min="0" value={billDiscount || ''} onChange={(event) => setBillDiscount(Number(event.target.value))} />
-            </label>
-            <div className="total-row"><span>ต้องชำระ</span><strong>{formatMoney(posTotal)}</strong></div>
-          </div>
-
-          <div className="segmented">
-            {paymentMethods.map((method) => (
-              <button
-                type="button"
-                key={method}
-                className={posPayment === method ? 'active' : ''}
-                disabled={method === 'PromptPay'}
-                onClick={() => method === 'เงินสด' && setPosPayment(method)}
-              >
-                {method}{method === 'PromptPay' ? ' (เร็วๆ นี้)' : ''}
-              </button>
-            ))}
-          </div>
-
-          <label className="field">
-            <span>รับเงิน</span>
-            <input type="number" min="0" value={cashReceived || ''} onChange={(event) => setCashReceived(Number(event.target.value))} />
-          </label>
-
-          <div className="cash-buttons">
-            <button type="button" onClick={() => setCashReceived(posTotal)}>พอดี</button>
-            <button type="button" onClick={() => setCashReceived(500)}>500</button>
-            <button type="button" onClick={() => setCashReceived(1000)}>1000</button>
-          </div>
-
-          <div className="change-box">
-            <span>เงินทอน</span>
-            <strong>{formatMoney(posChange)}</strong>
-          </div>
-
-          <button
-            className="primary-action"
-            type="button"
-            onClick={completePosSale}
-            disabled={isPrintingReceipt}
-          >
-            <Icon name={isPrintingReceipt ? 'hourglass_top' : 'picture_as_pdf'} />
-            {isPrintingReceipt ? 'กำลังสร้าง PDF...' : 'ทำรายการ / สร้างใบเสร็จ PDF'}
-          </button>
-          <button className="secondary-action" type="button" onClick={clearPosCart}>
-            <Icon name="backspace" /> ล้างบิล
-          </button>
-        </aside>}
-
-        {isCompactPos && (
-          <>
+        <button className="secondary-action" disabled={!posCart.length} onClick={clearPosCart}>ล้างบิล</button>
+        <>
             <button
               className="pos-cart-trigger"
               type="button"
@@ -4519,7 +4280,7 @@ export default function App() {
               onClick={(event) => {
                 event.currentTarget.focus({ preventScroll: true });
                 setMobileScannerOpen(false);
-                setPosCheckoutOpen(true);
+                setCheckoutStep(0); setAmountBuffer(''); setPosAmountField('cash'); setPosCheckoutOpen(true);
               }}
             >
               <span className="pos-cart-symbol"><Icon name="shopping_cart" /></span>
@@ -4529,7 +4290,6 @@ export default function App() {
             </button>
             {posCheckoutOpen && renderPosCheckout()}
           </>
-        )}
       </div>
     );
   }
@@ -4538,28 +4298,28 @@ export default function App() {
     const gasSaleCount = gasJobs.length;
 
     return (
-      <div className="gas-sales-page">
+      <div className={`gas-sales-page gas-step-${gasStep}`}>
         <section className="gas-sale-header">
           <div>
-            <h2>ขายแก๊ส <span className="badge accent">New Sale</span></h2>
-            <p>Manage delivery, tank sizing, tank return, and payment records.</p>
+            <h2>ขายแก๊ส</h2>
+
           </div>
           <div className="gas-header-actions">
             <button className="secondary-action" type="button" onClick={() => setCurrentView('HISTORY')}>
               <Icon name="history" /> ประวัติย้อนหลัง
             </button>
-            <button className="primary-action" type="button" onClick={createGasJob} disabled={gasOrderItems.length === 0}>
-              <Icon name="save" /> ยืนยันการขาย
-            </button>
+
           </div>
         </section>
 
-        <section className="panel gas-tank-panel">
-          <PanelTitle icon="propane_tank" title="เลือกขนาดถังแก๊ส" detail={gasNotice} />
+        {gasStep === 'selection' && <section className="panel gas-tank-panel">
+          <PanelTitle icon="propane_tank" title="เลือกยี่ห้อแก๊ส" detail={gasNotice} />
+          <div className="touch-options gas-brands">{['สยาม','ปตท'].map(brand => <button key={brand} aria-pressed={gasBrand === brand} onClick={() => setGasBrand(brand)}><img src={brand === 'สยาม' ? '/brands/siam.png' : '/brands/ptt.svg'} alt=""/>{brand}</button>)}</div>
+          {gasBrand && <h3>เลือกขนาดถัง · {gasBrand}</h3>}
           <div className="gas-tank-grid">
-            {gasItems.length === 0 ? (
+            {!gasBrand ? null : gasItems.length === 0 ? (
               <EmptyState text="ยังไม่มีขนาดถังแก๊สใน tingkum_db" />
-            ) : gasItems.map((item, index) => (
+            ) : gasItems.map((item) => (
               <div
                 className={`gas-tank-card ${(gasQuantities[item.id] ?? 0) > 0 ? 'selected' : ''}`}
                 key={item.id}
@@ -4573,7 +4333,7 @@ export default function App() {
                   }
                 }}
               >
-                {index === 0 && <span className="gas-card-ribbon">popular</span>}
+
                 <img src={item.imageUrl} alt={item.name} />
                 <strong>{item.name}</strong>
                 <span>{formatMoney(item.price)}</span>
@@ -4608,10 +4368,12 @@ export default function App() {
               </div>
             ))}
           </div>
-        </section>
+          <button className="primary-action gas-next" disabled={!gasSelectedCount} onClick={() => setGasStep('delivery')}>ถัดไป · กรอกรายละเอียด</button>
+        </section>}
 
-        <section className="panel gas-details-panel">
-          <PanelTitle icon="pin_drop" title="รายละเอียด" />
+        {gasStep === 'delivery' && <section className="panel gas-details-panel">
+          <button className="secondary-action" onClick={() => setGasStep('selection')}>ย้อนกลับ · แก้ไขถัง</button>
+          <PanelTitle icon="pin_drop" title="รายละเอียดการส่ง" detail={gasBrand + ' · ' + gasOrderItems.map(item => item.name + ' × ' + item.quantity).join(', ')} />
           <div className="form-stack">
             <label className="field">
               <span>ชื่อที่อยู่ / จุดหมายปลายทาง</span>
@@ -4622,7 +4384,7 @@ export default function App() {
               <input value={gasCustomer.name} onChange={(event) => setGasCustomer({ ...gasCustomer, name: event.target.value })} placeholder="ชื่อผู้สั่ง" />
             </label>
             <label className="field">
-              <span>เบอร์โทรศัพท์</span>
+              <span>เบอร์โทรศัพท์ (ถ้ามี)</span>
               <input value={gasCustomer.phone} onChange={(event) => setGasCustomer({ ...gasCustomer, phone: event.target.value })} placeholder="08x-xxx-xxxx" />
             </label>
             <label className="field">
@@ -4634,7 +4396,7 @@ export default function App() {
               </select>
             </label>
           </div>
-        </section>
+        </section>}
 
         <section className="panel gas-recent-panel">
           <PanelTitle icon="receipt_long" title="รายการล่าสุด" detail={`${gasSaleCount} รายการวันนี้`} />
@@ -4684,7 +4446,7 @@ export default function App() {
           </div>
         </section>
 
-        <aside className="panel gas-status-panel">
+        {gasStep === 'delivery' && <aside className="panel gas-status-panel">
           <PanelTitle icon="fact_check" title="สถานะ" />
           <div className="gas-status-controls">
             <div className="gas-return-control">
@@ -4723,7 +4485,8 @@ export default function App() {
             </label>
             <div className="gas-net-total"><span>ยอดรวมสุทธิ</span><strong>{formatMoney(gasTotal)}</strong></div>
           </div>
-        </aside>
+          <button className="primary-action" disabled={!gasBrand || !gasOrderItems.length || !gasCustomer.name.trim() || !gasCustomer.address.trim() || !gasDriverId} onClick={createGasJob}>ทำรายการแก๊ส</button>
+        </aside>}
 
         <section className="panel gas-followup-panel">
           <PanelTitle
@@ -4777,29 +4540,32 @@ export default function App() {
 
   function renderLotteryPage() {
     const matchingTicket = lotteryTickets.find((ticket) => ticket.number === lotteryInput.trim());
+    const inCart = lotteryCart.find(item => item.id === String(matchingTicket?.id))?.quantity ?? 0;
+    const sold = matchingTicket ? salesHistory.filter(sale => sale.channel === 'LOTTERY' && !sale.cancelledAt).flatMap(sale => sale.items)
+      .filter(item => String(item.ticketId ?? item.id) === String(matchingTicket.id)).reduce((sum,item) => sum + item.quantity,0) : 0;
 
     return (
       <div className="lottery-sales-page">
         <section className="panel lottery-entry-panel">
           <PanelTitle icon="confirmation_number" title="ขายหวย" detail={lotteryNotice} />
-          <div className="input-with-button large-input">
-            <input
-              value={lotteryInput}
-              maxLength={6}
-              onChange={(event) => setLotteryInput(event.target.value.replace(/\D/g, '').slice(0, 6))}
-              onKeyDown={(event) => event.key === 'Enter' && searchLottery()}
-              placeholder="ใส่เลข 6 หลัก"
-            />
-            <button type="button" onClick={searchLottery}><Icon name="add_shopping_cart" /> เพิ่มเข้ารายการ</button>
+          <div className="touch-options lottery-tabs">
+            <button aria-pressed={lotteryTab === 'keypad'} onClick={() => setLotteryTab('keypad')}>แป้นเลข</button>
+            <button aria-pressed={lotteryTab === 'map'} onClick={() => setLotteryTab('map')}>ผังรวม 00–99</button>
           </div>
-
-          {matchingTicket && (
-            <div className="stock-result">
-              <span>พบเลข {matchingTicket.number} {matchingTicket.series}</span>
-              <strong>เหลือ {lotteryAvailable(matchingTicket)} ใบ</strong>
-              <button type="button" onClick={() => addLotteryTicket(matchingTicket)}>เพิ่มลงรายการ</button>
+          {lotteryTab === 'map' ? <div className="suffix-grid">{Array.from({length:100},(_,i) => String(i).padStart(2,'0')).map(number => {
+            const ticket = lotteryTickets.find(row => row.number === number);
+            const available = ticket ? lotteryAvailable(ticket) : 0;
+            return <button key={number} onClick={() => {setLotteryInput(number);setLotteryTab('keypad');}}>{number}<small>{available} ใบ</small></button>;
+          })}</div> : <div className="lottery-dial">
+            <div className="lottery-selection" aria-live="polite">
+              <label>เลขสลาก<input inputMode="numeric" aria-label="เลขสลาก" value={lotteryInput} maxLength={6} placeholder="– –" onChange={e => setLotteryInput(e.target.value.replace(/\D/g,''))}/></label>
+              {lotteryInput.length >= 2 && <><strong>{matchingTicket ? 'เหลือให้เลือก ' + lotteryAvailable(matchingTicket) + ' ใบ' : 'ไม่พบเลขนี้ในสต็อก'}</strong>
+                {matchingTicket && <span>ในบิลนี้ {inCart} ใบ · ขายรอบนี้ {sold} ใบ</span>}</>}
+              <button className="primary-action" disabled={!matchingTicket || lotteryAvailable(matchingTicket)<1} onClick={searchLottery}>เพิ่มเข้ารายการ</button>
             </div>
-          )}
+            <div className="counter-keys">{['1','2','3','4','5','6','7','8','9','ล้าง','0','ลบ'].map(key =>
+              <button key={key} onClick={() => setLotteryInput(prev => key === 'ล้าง' ? '' : key === 'ลบ' ? prev.slice(0,-1) : (prev.length >= 2 ? '' : prev)+key)}>{key}</button>)}</div>
+          </div>}
         </section>
 
         <aside className="panel summary-panel lottery-cart-panel">
@@ -4859,7 +4625,11 @@ export default function App() {
 
     return (
       <div className="topup-page">
-        <section className="panel topup-entry-panel">
+        <div className="touch-options" role="group" aria-label="หน้าเติมเงิน">
+          <button type="button" aria-pressed={topupTab === 'entry'} onClick={() => setTopupTab('entry')}>เติมเงิน</button>
+          <button type="button" aria-pressed={topupTab === 'orders'} onClick={() => setTopupTab('orders')}>รายการเติมเงิน ({topupOrders.length})</button>
+        </div>
+        {topupTab === 'entry' ? <section className="panel topup-entry-panel">
           <PanelTitle icon="phone_iphone" title="เติมเงินมือถือ" detail={topupNotice} />
 
           <div className="topup-provider-grid" aria-label="เลือกผู้ให้บริการ">
@@ -4870,7 +4640,7 @@ export default function App() {
                 className={topupProvider === provider ? 'active' : ''}
                 onClick={() => setTopupProvider(provider)}
               >
-                <Icon name="cell_tower" />
+                <img className={'carrier-logo carrier-'+provider} src={'/brands/'+provider+(provider === 'DTAC' ? '.png' : '.svg')} alt="" />
                 {provider}
               </button>
             ))}
@@ -4895,7 +4665,7 @@ export default function App() {
               </button>
             ))}
             <button type="button" className="danger" onClick={deleteTopupPhoneDigit}>
-              Del
+              ลบ
             </button>
           </div>
 
@@ -4914,7 +4684,7 @@ export default function App() {
               ))}
             </div>
             <label className="field">
-              <span>Custom</span>
+              <span>ระบุยอดอื่น (บาท)</span>
               <input
                 type="number"
                 min="1"
@@ -4928,9 +4698,7 @@ export default function App() {
           <button className="primary-action" type="button" onClick={confirmTopupOrder}>
             <Icon name="check_circle" /> ยืนยันรายการ
           </button>
-        </section>
-
-        <section className="panel topup-orders-panel">
+        </section> : <section className="panel topup-orders-panel">
           <PanelTitle icon="list_alt" title="รายการเบอร์" detail={`${topupOrders.length} รายการ | รอเติม ${pendingTopupCount} | รอจ่าย ${unpaidTopupCount}`} />
           <div className="topup-summary-grid">
             <div>
@@ -5006,7 +4774,7 @@ export default function App() {
               </table>
             )}
           </div>
-        </section>
+        </section>}
       </div>
     );
   }
@@ -5523,7 +5291,7 @@ export default function App() {
                   <tr key={item.id}>
                     <td>
                       <strong>{item.name}</strong>
-                      <small>{item.barcode}</small>
+                      <small>{item.barcode || 'ยังไม่มีบาร์โค้ด'}</small>
                     </td>
                     <td>{item.category}</td>
                     <td>{item.stock} {item.unit}</td>
@@ -5534,6 +5302,8 @@ export default function App() {
                       </span>
                     </td>
                     <td>
+                      <button className="text-action" type="button" onClick={() => { setProductEditError(''); setProductEdit({ id: item.id, name: item.name, barcode: item.barcode, price: item.price ? String(item.price) : '' }); }}>แก้บาร์โค้ด / ราคา</button>
+                      {' '}
                       <button className="link-button danger" type="button" disabled={!isOwner} onClick={() => deleteStockProduct(item)}>
                         ลบ
                       </button>
@@ -5749,7 +5519,8 @@ export default function App() {
 
         <section className="panel wide-panel lottery-stock-panel">
           <PanelTitle icon="confirmation_number" title="Stock หวย" detail={lotteryStockNotice} />
-          <div className="lottery-stock-form">
+          <div className="book-intake"><h3>รับเล่ม 00–99</h3><label>จำนวนใบต่อเลข<input type="number" min="1" value={lotteryStockDraft.quantity} onChange={e => setLotteryStockDraft({...lotteryStockDraft,quantity:e.target.value})}/></label><label>ราคาต่อใบ<input type="number" min="1" value={lotteryStockDraft.price} onChange={e => setLotteryStockDraft({...lotteryStockDraft,price:e.target.value})}/></label><button className="primary-action" disabled={receivingBook || Number(lotteryStockDraft.quantity)<1 || Number(lotteryStockDraft.price)<=0} onClick={receiveBook}>รับเข้า {100 * Number(lotteryStockDraft.quantity)} ใบ</button></div>
+          <details><summary>จัดการเลข 6 หลักเดิม</summary><div className="lottery-stock-form">
             <label className="field">
               <span>เลขหวย</span>
               <input
@@ -5784,7 +5555,7 @@ export default function App() {
             <button className="primary-action" type="button" onClick={addManualLotteryStock}>
               <Icon name="add" /> เพิ่มเลขหวย
             </button>
-          </div>
+          </div></details>
 
           <div className="table-wrap lottery-stock-table">
             {lotteryTickets.length === 0 ? (
@@ -6020,6 +5791,7 @@ export default function App() {
   function renderClosingPage() {
     const confirmedCount = closingSummary?.checks.filter((check) => check.confirmed).length ?? 0;
     const canCloseShop = Boolean(closingSummary?.readyToClose && isOwner && isShopOpen);
+    const transfers = closingSummary?.sections.transfers;
 
     return (
       <div className="closing-page">
@@ -6052,7 +5824,7 @@ export default function App() {
             )}
           </div>
           <div className="closing-progress">
-            <strong>{confirmedCount}/{closingSections.length}</strong>
+            <strong>{confirmedCount}/{closingSummary?.checks.length ?? 5}</strong>
             <span>หมวดที่เช็คยอดแล้ว</span>
           </div>
         </section>
@@ -6206,6 +5978,19 @@ export default function App() {
               </div>
             </section>
 
+            {transfers && transfers.records > 0 && <section className="panel closing-section">
+              <div className="closing-section-head">
+                <PanelTitle icon={closingSectionMeta.TRANSFER.icon} title={closingSectionMeta.TRANSFER.label} detail={`${transfers.count} รายการสำเร็จ`} />
+                {renderClosingConfirm('TRANSFER')}
+              </div>
+              <div className="closing-metric-grid">
+                <div><span>ยอดที่โอน</span><strong>{baht(transfers.principal)}</strong></div>
+                <div><span>ค่าบริการ</span><strong>{baht(transfers.fee)}</strong></div>
+                <div><span>เงินสดรับ</span><strong>{baht(transfers.cash)}</strong></div>
+                <div><span>เงินทอน</span><strong>{baht(transfers.change)}</strong></div>
+              </div>
+              <button className="secondary-action" type="button" onClick={() => setCurrentView('TRANSFER')}>ดูรายการรับโอน</button>
+            </section>}
             <section className="panel closing-section wide-panel">
               <div className="closing-section-head">
                 <PanelTitle icon={closingSectionMeta.STOCK.icon} title={closingSectionMeta.STOCK.label} detail={`${closingSummary.sections.stock.movementCount} movement | ใกล้หมด ${closingSummary.sections.stock.lowProducts.length}`} />
@@ -6247,14 +6032,15 @@ export default function App() {
       <main className="login-shell">
         <section className="login-panel">
           <div>
-            <span className="badge accent">Tingkum POS</span>
-            <h1>Login</h1>
+            <div className="brand-mark"><Icon name="storefront" /></div>
+            <h1>เข้าสู่ระบบ Tingkum</h1>
             <p>{loginNotice}</p>
           </div>
 
           <label className="field">
-            <span>Username</span>
+            <span>ชื่อผู้ใช้</span>
             <input
+              autoComplete="username"
               value={loginForm.username}
               onChange={(event) => setLoginForm({ ...loginForm, username: event.target.value })}
               onKeyDown={(event) => event.key === 'Enter' && void handleLogin()}
@@ -6263,9 +6049,10 @@ export default function App() {
           </label>
 
           <label className="field">
-            <span>Password</span>
+            <span>รหัสผ่าน</span>
             <input
               type="password"
+              autoComplete="current-password"
               value={loginForm.password}
               onChange={(event) => setLoginForm({ ...loginForm, password: event.target.value })}
               onKeyDown={(event) => event.key === 'Enter' && void handleLogin()}
@@ -6275,7 +6062,6 @@ export default function App() {
           <button className="primary-action" type="button" onClick={() => void handleLogin()}>
             <Icon name="login" /> เข้าสู่ระบบ
           </button>
-          <small>owner เริ่มต้น: username `owner`, password `owner1234` ถ้ายังไม่ได้ตั้งค่าใน Railway env</small>
         </section>
       </main>
     );
@@ -6413,12 +6199,34 @@ export default function App() {
         return renderLotteryPage();
       case 'TOPUP':
         return renderTopupPage();
+      case 'TRANSFER':
+        return <TransferPage key={scanSessionId} api={API_BASE_URL} sessionId={scanSessionId} isOwner={isOwner} isShopOpen={isShopOpen} />;
       case 'HISTORY':
         return renderHistoryPage();
       case 'ANALYTICS':
-        return renderAnalyticsPage();
+        return <div className="operation-page">
+          {isOwner && <div className="workspace-switcher" role="group" aria-label="แดชบอร์ด">
+            <button type="button" aria-pressed={dashboardTab === 'sales'} onClick={() => setDashboardTab('sales')}><Icon name="monitoring" /> ภาพรวมร้าน</button>
+            <button type="button" aria-pressed={dashboardTab === 'tax'} onClick={() => setDashboardTab('tax')}><Icon name="receipt_long" /> จัดการภาษี</button>
+          </div>}
+          {isOwner && dashboardTab === 'tax' ? <TaxDashboard api={API_BASE_URL} /> : renderAnalyticsPage()}
+        </div>;
       case 'STOCK':
-        return renderStockPage();
+        return isOwner && <div className="operation-page">
+          <div className="workspace-switcher" role="group" aria-label="สต็อก">
+            <button type="button" aria-pressed={stockTab === 'products'} onClick={() => setStockTab('products')}><Icon name="inventory_2" /> สินค้าและสต็อก</button>
+            <button type="button" aria-pressed={stockTab === 'orders'} onClick={() => setStockTab('orders')}><Icon name="local_shipping" /> ใบสั่งซื้อและรับของ</button>
+            <button type="button" aria-pressed={stockTab === 'issue'} onClick={() => setStockTab('issue')}><Icon name="warehouse" /> โกดัง / เบิกของ</button>
+            <button type="button" aria-pressed={stockTab === 'count'} onClick={() => setStockTab('count')}><Icon name="fact_check" /> ตรวจนับสต็อก</button>
+          </div>
+          {stockTab === 'orders' ? <PurchaseOrders api={API_BASE_URL} products={stockItems} onRestock={async () => {
+            await Promise.all([refreshProducts(), refreshStockLog()]);
+          }} /> : stockTab === 'issue' ? <WarehouseStock api={API_BASE_URL} products={stockItems} /> : stockTab === 'count' ? <StockDocuments api={API_BASE_URL} products={stockItems} onRefreshStock={async () => {
+            await Promise.all([refreshProducts(), refreshStockLog()]);
+          }} /> : renderStockPage()}
+        </div>;
+      case 'SETTINGS':
+        return isOwner && <StoreSettingsPage api={API_BASE_URL} onSave={setStoreSettings} />;
       case 'STAFF':
         return renderStaffPage();
       case 'CLOSING':
@@ -6437,30 +6245,39 @@ export default function App() {
       <div className="app-shell">
         <aside className="sidebar">
           <div className="brand-block">
-            <strong>Tingkum</strong>
-            <span>Shop POS</span>
+            <div className="brand-mark"><Icon name="storefront" /></div>
+            <div><strong>Tingkum</strong><small>ระบบหน้าร้าน</small></div>
           </div>
 
-          <nav className="nav-list" aria-label="Main navigation">
-            {allowedViews.map((view) => (
-              <button
-                type="button"
-                key={view}
-                className={`nav-item ${currentView === view ? 'selected' : ''}`}
-                onClick={() => setCurrentView(view)}
-              >
-                <Icon name={viewMeta[view].icon} />
-                <span>{viewMeta[view].title}</span>
-              </button>
-            ))}
+          <nav className="nav-list" aria-label="เมนูหลัก">
+            {navigationGroups.map((group) => <div className={group.label === 'จัดการร้าน' ? 'nav-group management-nav' : 'nav-group'} key={group.label}>
+              <p className="nav-group-label">{group.label}</p>
+              {group.views.filter((view) => allowedViews.includes(view)).map((view) => (
+                <button
+                  type="button"
+                  key={view}
+                  aria-current={currentView === view ? 'page' : undefined}
+                  className={`nav-item ${currentView === view ? 'selected' : ''}`}
+                  onClick={() => setCurrentView(view)}
+                >
+                  <Icon name={viewMeta[view].icon} />
+                  <span>{viewMeta[view].title}</span>
+                </button>
+              ))}
+            </div>)}
           </nav>
+          <label className="mobile-view-picker">
+            <span>ไปที่</span>
+            <select aria-label="เลือกหน้าจอ" value={currentView} onChange={(event) => setCurrentView(event.target.value as View)}>
+              {currentView === 'CLOSING' && <option value="CLOSING">{viewMeta.CLOSING.title}</option>}
+              {navigationGroups.flatMap((group) => group.views).filter((view) => allowedViews.includes(view))
+                .map((view) => <option key={view} value={view}>{viewMeta[view].title}</option>)}
+            </select>
+          </label>
 
           <div className="sidebar-status">
-            <span>Database</span>
-            <strong>tingkum_db</strong>
-            <small>{apiStatus}</small>
-            <span>Session</span>
             <strong>{scanSessionId}</strong>
+            <small>{apiStatus}</small>
           </div>
         </aside>
 
@@ -6471,8 +6288,7 @@ export default function App() {
               <p>{viewMeta[currentView].subtitle}</p>
             </div>
             <div className="topbar-actions">
-              <span>{currentUser?.displayName} ({currentUser?.role})</span>
-              <span>{scanSessionId}</span>
+              <span className="topbar-user">{currentUser?.displayName}</span>
               <span className={`shop-status-chip ${shopStatus === 'CLOSED' ? 'closed' : isShopOpen ? 'open' : 'pending'}`}>
                 {closingStatusText()}
               </span>
@@ -6486,25 +6302,38 @@ export default function App() {
                   }}
                 >
                   <Icon name={isShopOpen ? 'lock_clock' : 'storefront'} />
-                  {isShopOpen ? 'ปิดร้าน' : shopStatus === 'CLOSED' ? 'Reopen' : 'เปิดร้าน'}
+                  {isShopOpen ? 'ปิดร้าน' : shopStatus === 'CLOSED' ? 'เปิดรอบอีกครั้ง' : 'เปิดร้าน'}
                 </button>
               )}
-              <span>{todayLabel}</span>
-              <button type="button"><Icon name="notifications" /></button>
-              <button type="button" title="เปลี่ยนรหัสผ่าน" onClick={() => setPasswordPanelOpen(true)}>
+              <span className="topbar-date">{todayLabel}</span>
+              <button type="button" aria-label="เปลี่ยนรหัสผ่าน" title="เปลี่ยนรหัสผ่าน" onClick={() => setPasswordPanelOpen(true)}>
                 <Icon name="lock_reset" />
               </button>
-              <button type="button" title="ออกจากระบบ" onClick={() => void logout()}><Icon name="logout" /></button>
+              <button type="button" aria-label="ออกจากระบบ" title="ออกจากระบบ" onClick={() => void logout()}><Icon name="logout" /></button>
             </div>
           </header>
 
           <main className="page-scroll" ref={pageScrollRef}>
+            {navigationGroups[1].views.some(view => view === currentView) && <nav className="manage-tools" aria-label="เครื่องมือจัดการร้าน">{navigationGroups[1].views.filter(view => allowedViews.includes(view)).map(view => <button key={view} aria-current={currentView === view ? 'page' : undefined} onClick={() => setCurrentView(view)}><Icon name={viewMeta[view].icon}/>{viewMeta[view].title}</button>)}</nav>}
             {renderPage()}
           </main>
         </div>
       </div>
       {renderPasswordPanel()}
       {renderProductRegistrationRequestPanel()}
+      {isOwner && productEdit && <dialog className="product-details-dialog" aria-labelledby="product-details-title" ref={(dialog) => {
+        if (dialog && !dialog.open) dialog.showModal();
+      }} onCancel={(event) => { event.preventDefault(); if (!productEditBusy) setProductEdit(undefined); }}>
+        <form className="panel operation-panel" onSubmit={saveProductDetails}>
+          <h2 id="product-details-title">{productEdit.name}</h2>
+          <fieldset className="operation-fields" disabled={productEditBusy}>
+            <label className="field"><span>บาร์โค้ด</span><input autoFocus maxLength={100} value={productEdit.barcode} onChange={(event) => setProductEdit({ ...productEdit, barcode: event.target.value })} /></label>
+            <label className="field"><span>ราคาขาย (บาท)</span><input type="number" min="0" max="9999999999.99" step="0.01" value={productEdit.price} onChange={(event) => setProductEdit({ ...productEdit, price: event.target.value })} /></label>
+            {productEditError && <p className="operation-feedback error" role="alert">{productEditError}</p>}
+            <div className="operation-actions"><button type="submit" className="primary-action">บันทึก</button><button type="button" className="secondary-action" onClick={() => setProductEdit(undefined)}>ยกเลิก</button></div>
+          </fieldset>
+        </form>
+      </dialog>}
     </>
   );
 }

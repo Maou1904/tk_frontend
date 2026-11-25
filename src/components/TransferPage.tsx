@@ -1,0 +1,163 @@
+import { useRef, useState } from 'react';
+import type { FormEvent } from 'react';
+import axios from 'axios';
+import { baht, bahtInput, dateTime, errorText, operationId, parseMoney, useOperationData } from '../storeOperations';
+import type { Transfer, TransferTotals } from '../storeOperations';
+
+type TransferData = { totals: TransferTotals; records: Transfer[]; defaultFee: number };
+type Props = { api: string; sessionId: string; isOwner: boolean; isShopOpen: boolean };
+const banks = ['กสิกรไทย', 'ไทยพาณิชย์', 'กรุงไทย', 'กรุงเทพ', 'กรุงศรี', 'ออมสิน', 'ธ.ก.ส.', 'ทหารไทยธนชาต', 'พร้อมเพย์', 'อื่น ๆ'];
+const logos = ['KBANK', 'SCB', 'KTB', 'BBL', 'BAY', 'GSB', 'BAAC', 'TTB', 'PromptPay'];
+const emptyForm = { principal: '', fee: null as string | null, cash: '', bank: '', reference: '', note: '' };
+
+export default function TransferPage({ api, sessionId, isOwner, isShopOpen }: Props) {
+  const path = `${api}/api/app-sessions/${encodeURIComponent(sessionId)}/transfers`;
+  const [revision, setRevision] = useState(0);
+  const { data, loading, error } = useOperationData<TransferData>(path, revision);
+  const [form, setForm] = useState(emptyForm);
+  const [amountField, setAmountField] = useState<'principal' | 'fee'>('principal');
+  const [replaceAmount, setReplaceAmount] = useState(false);
+  const [review, setReview] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [notice, setNotice] = useState('');
+  const [failure, setFailure] = useState('');
+  const [cancel, setCancel] = useState<Transfer>();
+  const [reason, setReason] = useState('');
+  const pending = useRef<{ key: string; id: string } | null>(null);
+  const principalInput = useRef<HTMLInputElement>(null);
+  const refresh = () => setRevision((value) => value + 1);
+  const feeValue = form.fee ?? (data ? bahtInput(data.defaultFee) : '');
+  const principal = parseMoney(form.principal);
+  const fee = parseMoney(feeValue);
+  const cash = parseMoney(form.cash);
+  const due = principal !== null && fee !== null ? principal + fee : null;
+  const difference = due !== null && cash !== null ? cash - due : null;
+
+  function update(field: keyof typeof emptyForm, value: string) {
+    setReplaceAmount(false);
+    setForm((previous) => ({ ...previous, [field]: value }));
+  }
+
+  function enterKey(key: string) {
+    const field = review ? 'cash' : amountField;
+    const value = (field === 'fee' ? feeValue : form[field]) || '';
+    const next = key === 'ลบ' ? value.slice(0,-1) : (replaceAmount ? '' : value) + key;
+    if (!/^\d{0,9}(?:\.\d{0,2})?$/.test(next)) return;
+    update(field, next === '.' ? '0.' : next);
+    setReplaceAmount(false);
+  }
+
+  async function save(event: FormEvent) {
+    event.preventDefault();
+    if (busy || !isShopOpen) return;
+    if (!review) { if (principal && fee !== null && form.bank) setReview(true); return; }
+    setNotice('');
+    setFailure('');
+    if (!principal || fee === null || cash === null || difference === null || difference < 0) {
+      setFailure('ตรวจยอดโอน ค่าบริการ และเงินสดรับอีกครั้ง');
+      return;
+    }
+    const body = { principal, fee, cashReceived: cash, bank: form.bank, note: form.note };
+    const key = JSON.stringify(body);
+    if (pending.current?.key !== key) pending.current = { key, id: operationId() };
+    setBusy(true);
+    try {
+      await axios.post(path, { ...body, id: pending.current.id });
+      pending.current = null;
+      setNotice(`บันทึกแล้ว · โอน ${baht(principal)} · ทอน ${baht(difference)}`);
+      setForm(emptyForm);
+      setAmountField('principal'); setReplaceAmount(false);
+      setReview(false);
+      refresh();
+    } catch (err) {
+      setFailure(errorText(err));
+    } finally {
+      setBusy(false);
+      requestAnimationFrame(() => principalInput.current?.focus());
+    }
+  }
+
+
+  async function cancelTransfer(event: FormEvent) {
+    event.preventDefault();
+    if (!cancel || !reason.trim() || busy) return;
+    setBusy(true);
+    setNotice('');
+    setFailure('');
+    try {
+      await axios.post(`${path}/${cancel.id}/cancel`, { reason });
+      setCancel(undefined);
+      setReason('');
+      setNotice('ยกเลิกบันทึกรายการแล้ว');
+      refresh();
+    } catch (err) {
+      setFailure(errorText(err));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="operation-page transfer-page">
+      {(failure || error) && <div className="operation-feedback error" role="alert">{failure || error}</div>}
+      {notice && <div className="operation-feedback success" role="status">{notice}</div>}
+      <div className="transfer-workspace">
+        <section className="panel operation-panel">
+          <div className="operation-heading">
+            <span className="material-symbols-outlined" aria-hidden="true">account_balance</span>
+            <div><h2>บันทึกรับเงินสดเพื่อโอน</h2><p>โอนผ่านแอปธนาคาร แล้วบันทึกรายการที่นี่</p></div>
+          </div>
+          {!isShopOpen && <p className="operation-feedback">เปิดร้านก่อนบันทึกรายการ</p>}
+          <form onSubmit={save}>
+            <fieldset disabled={!isShopOpen || busy || !data} className="operation-fields">
+              {!review ? <>
+              <div className="operation-form-grid">
+                <label className="field"><span>ยอดที่ลูกค้าต้องการโอน (บาท)</span><input ref={principalInput} onFocus={() => {setAmountField('principal');setReplaceAmount(true);}} required inputMode="decimal" placeholder="0.00" value={form.principal} onChange={(event) => update('principal', event.target.value)} /></label>
+                <label className="field"><span>ค่าบริการ (บาท)</span><input onFocus={() => {setAmountField('fee');setReplaceAmount(true);}} required inputMode="decimal" value={feeValue} onChange={(event) => update('fee', event.target.value)} /></label>
+              </div>
+              <div className="touch-options bank-options">{banks.map((bank,index) => <button type="button" aria-pressed={form.bank === bank} key={bank} onClick={() => update('bank', bank)}>{logos[index] && <img src={'/banks/'+logos[index]+'.png'} alt=""/>}{bank}</button>)}</div>
+              <label className="field"><span>หมายเหตุ</span><input maxLength={250} value={form.note} onChange={(event) => update('note', event.target.value)} /></label>
+              <button type="submit" className="pos-cart-trigger transfer-trigger" disabled={!principal || fee === null || !form.bank}>สรุปรายการ <strong>{baht(due ?? 0)}</strong></button>
+              </> : <><div className="fee-ticket"><span>{form.bank} · ยอดที่ต้องรับจริง</span><strong>{baht(due ?? 0)}</strong></div>
+              <label className="field"><span>เงินสดที่รับจริง (บาท)</span><input required inputMode="decimal" placeholder="0.00" value={form.cash} onChange={(event) => update('cash', event.target.value)} /></label>
+              <div className="operation-actions">
+                <button type="button" className="secondary-action" disabled={due === null || !principal} onClick={() => due !== null && update('cash', bahtInput(due))}>รับพอดี</button>
+                {[100, 500, 1000].map((amount) => <button key={amount} type="button" className="secondary-action" onClick={() => update('cash', String(amount))}>{amount.toLocaleString('th-TH')} บาท</button>)}
+              </div>
+              <div className="operation-actions"><button type="button" className="secondary-action" onClick={() => setReview(false)}>ย้อนกลับ</button><button type="submit" className="primary-action" disabled={difference === null || difference < 0}>{busy ? 'กำลังบันทึก…' : 'รับเงิน'}</button></div></>}
+
+            </fieldset>
+          </form>
+        </section>
+        <div className="operation-stack">
+          <section className="panel cash-dial">
+            <h2>{review ? 'เงินสดที่รับ' : amountField === 'fee' ? 'ค่าบริการ' : 'ยอดโอน'}</h2>
+            <output>{(review ? form.cash : amountField === 'fee' ? feeValue : form.principal) || '0'} บาท</output>
+            <div className="counter-keys">{['1','2','3','4','5','6','7','8','9','.','0','ลบ'].map(key => <button key={key} type="button" disabled={!data || !isShopOpen || busy} onClick={() => enterKey(key)}>{key}</button>)}</div>
+            {review && difference !== null && <p aria-live="polite">{difference < 0 ? 'เงินสดยังขาด' : 'เงินทอน'} <b>{baht(Math.abs(difference))}</b></p>}
+          </section>
+        </div>
+      </div>
+      <section className="panel operation-panel">
+        <div className="operation-title-row"><div><h2>รายการรับโอนรอบนี้</h2><p>{data ? `${data.totals.count} รายการสำเร็จ · แสดงล่าสุดสูงสุด 100 รายการ` : ''}</p></div><button className="secondary-action" type="button" onClick={refresh} disabled={loading}>รีเฟรช</button></div>
+        {data && <div className="operation-metrics">
+          {([['ยอดที่โอน', data.totals.principal], ['ค่าบริการ', data.totals.fee], ['เงินสดรับ', data.totals.cash], ['เงินทอน', data.totals.change]] as const).map(([label, value]) => <div key={label}><span>{label}</span><strong>{baht(value)}</strong></div>)}
+        </div>}
+        {cancel && <form className="operation-feedback operation-stack" onSubmit={cancelTransfer}>
+          <strong>ยกเลิกบันทึกรายการ {baht(cancel.principal)}</strong><p>ตรวจสอบธุรกรรมในแอปธนาคารก่อน การยกเลิกนี้มีผลกับบันทึกของร้าน</p>
+          <label className="field"><span>เหตุผล</span><input required maxLength={250} value={reason} onChange={(event) => setReason(event.target.value)} /></label>
+          <div className="operation-actions"><button className="secondary-action" type="button" onClick={() => { setCancel(undefined); setReason(''); }} disabled={busy}>กลับ</button><button className="danger-action" type="submit" disabled={busy || !reason.trim()}>ยืนยันยกเลิก</button></div>
+        </form>}
+        {data?.records.length ? <div className="operation-table"><table>
+          <thead><tr><th>เวลา / ผู้บันทึก</th><th>ธนาคาร / อ้างอิง</th><th>ยอดโอน</th><th>ค่าบริการ</th><th>รับสด</th><th>ทอน</th><th>สถานะ</th></tr></thead>
+          <tbody>{data.records.map((row) => <tr key={row.id}>
+            <td>{dateTime(row.createdAt)}<small>{row.staff}</small></td>
+            <td>{row.bank || '—'}<small>{row.reference}{row.reference && row.note ? ' · ' : ''}{row.note}</small></td>
+            <td>{baht(row.principal)}</td><td>{baht(row.fee)}</td><td>{baht(row.cashReceived)}</td><td>{baht(row.change)}</td>
+            <td>{row.cancelledAt ? <><span className="badge danger">ยกเลิกแล้ว</span><small>{row.cancelReason}</small></> : isOwner && isShopOpen ? <button type="button" className="text-action" disabled={busy} onClick={() => { setCancel(row); setReason(''); }}>ยกเลิกบันทึก</button> : <span className="badge success">บันทึกแล้ว</span>}</td>
+          </tr>)}</tbody>
+        </table></div> : <p className="operation-empty">{loading ? 'กำลังโหลดรายการ…' : 'ยังไม่มีรายการรับโอนในรอบนี้'}</p>}
+      </section>
+    </div>
+  );
+}
