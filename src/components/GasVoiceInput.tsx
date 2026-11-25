@@ -1,4 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
+import axios from 'axios';
+import type { GasVoiceDraft } from '../gasVoice';
 
 interface SpeechResult {
   isFinal: boolean;
@@ -21,7 +23,8 @@ type RecognitionConstructor = new () => Recognition;
 type VoiceResult = { ok: boolean; message: string };
 
 interface GasVoiceInputProps {
-  onApply: (text: string) => VoiceResult;
+  api: string;
+  onApply: (text: string, draft?: GasVoiceDraft) => VoiceResult;
   onBusyChange: (busy: boolean) => void;
 }
 
@@ -43,11 +46,14 @@ const errorMessages: Record<string, string> = {
   aborted: 'หยุดฟังแล้ว ฟอร์มยังไม่เปลี่ยน',
 };
 
-export default function GasVoiceInput({ onApply, onBusyChange }: GasVoiceInputProps) {
+export default function GasVoiceInput({ api, onApply, onBusyChange }: GasVoiceInputProps) {
   const [text, setText] = useState('');
   const [busy, setBusy] = useState(false);
   const [stopping, setStopping] = useState(false);
   const [feedback, setFeedback] = useState<VoiceResult | null>(null);
+  const [useAI, setUseAI] = useState(false);
+  const [interpreting, setInterpreting] = useState(false);
+  const requestRef = useRef<AbortController | null>(null);
   const recognitionRef = useRef<Recognition | null>(null);
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const finalTextRef = useRef('');
@@ -56,12 +62,22 @@ export default function GasVoiceInput({ onApply, onBusyChange }: GasVoiceInputPr
   const busyChangeRef = useRef(onBusyChange);
   const supported = Boolean(recognitionConstructor());
   const secure = window.isSecureContext;
+  const locked = busy || interpreting;
 
   useEffect(() => { applyRef.current = onApply; }, [onApply]);
   useEffect(() => { busyChangeRef.current = onBusyChange; }, [onBusyChange]);
+  useEffect(() => {
+    const controller = new AbortController();
+    axios.get<{ enabled: boolean }>(`${api}/api/gas/voice/status`, { signal: controller.signal, timeout: 4000 })
+      .then(({ data }) => { if (!controller.signal.aborted) setUseAI(data.enabled === true); })
+      .catch(() => { /* Older/offline servers keep the local parser available. */ });
+    return () => controller.abort();
+  }, [api]);
 
   useEffect(() => {
     function release() {
+      requestRef.current?.abort();
+      requestRef.current = null;
       if (timerRef.current) clearTimeout(timerRef.current);
       timerRef.current = null;
       const recognition = recognitionRef.current;
@@ -75,10 +91,11 @@ export default function GasVoiceInput({ onApply, onBusyChange }: GasVoiceInputPr
       busyChangeRef.current(false);
     }
     function hide() {
-      if (document.visibilityState === 'hidden' && recognitionRef.current) {
+      if (document.visibilityState === 'hidden' && (recognitionRef.current || requestRef.current)) {
         release();
         setBusy(false);
         setStopping(false);
+        setInterpreting(false);
         setFeedback({ ok: false, message: 'หยุดฟังเมื่อออกจากหน้านี้ ฟอร์มยังไม่เปลี่ยน' });
       }
     }
@@ -90,6 +107,44 @@ export default function GasVoiceInput({ onApply, onBusyChange }: GasVoiceInputPr
       release();
     };
   }, []);
+
+  async function interpretAndApply(raw: string) {
+    if (requestRef.current) return;
+    if (!useAI) {
+      setFeedback(applyRef.current(raw));
+      return;
+    }
+    const controller = new AbortController();
+    requestRef.current = controller;
+    setInterpreting(true);
+    setFeedback(null);
+    busyChangeRef.current(true);
+    try {
+      const { data } = await axios.post<{ draft: GasVoiceDraft }>(`${api}/api/gas/voice/parse`, { text: raw }, { signal: controller.signal, timeout: 15000 });
+      if (controller.signal.aborted || requestRef.current !== controller) return;
+      if (!data.draft || !Array.isArray(data.draft.items) || !Array.isArray(data.draft.errors) || !Array.isArray(data.draft.notes)) throw new Error('Invalid interpretation');
+      const result = applyRef.current(raw, data.draft);
+      setFeedback({ ...result, message: `AI ช่วยแยกข้อความ · ${result.message}` });
+    } catch {
+      if (controller.signal.aborted || requestRef.current !== controller) return;
+      const result = applyRef.current(raw);
+      setFeedback({ ...result, message: `AI ยังไม่พร้อม ใช้การแยกคำพื้นฐาน · ${result.message}` });
+    } finally {
+      if (requestRef.current === controller) {
+        requestRef.current = null;
+        setInterpreting(false);
+        busyChangeRef.current(false);
+      }
+    }
+  }
+
+  function cancelInterpretation() {
+    requestRef.current?.abort();
+    requestRef.current = null;
+    setInterpreting(false);
+    busyChangeRef.current(false);
+    setFeedback({ ok: false, message: 'ยกเลิกการแยกข้อความแล้ว ฟอร์มยังไม่เปลี่ยน' });
+  }
 
   function finishBusy() {
     if (timerRef.current) clearTimeout(timerRef.current);
@@ -170,7 +225,7 @@ export default function GasVoiceInput({ onApply, onBusyChange }: GasVoiceInputPr
       finishBusy();
       if (!failedRef.current && finalTextRef.current) {
         setText(finalTextRef.current);
-        setFeedback(applyRef.current(finalTextRef.current));
+        void interpretAndApply(finalTextRef.current);
       } else if (!failedRef.current) {
         setFeedback({ ok: false, message: 'ยังฟังไม่ครบ ลองพูดอีกครั้ง หรือแก้ข้อความแล้วกดกรอกฟอร์ม' });
       }
@@ -188,13 +243,13 @@ export default function GasVoiceInput({ onApply, onBusyChange }: GasVoiceInputPr
     <section className="panel gas-voice-panel" aria-labelledby="gas-voice-title">
       <div className="gas-voice-heading">
         <div>
-          <h3 id="gas-voice-title">พูดรับออร์เดอร์แก๊ส <span>ทดลอง</span></h3>
+          <h3 id="gas-voice-title">พูดรับออร์เดอร์แก๊ส <span>{useAI ? 'AI' : 'ทดลอง'}</span></h3>
           <p>“ปตท. ถังใหญ่ 2 ถัง ถังเล็ก 1 ถัง ส่งที่หลังวัด”</p>
           <small>พูดครั้งเดียวเพื่อกรอกฟอร์ม แล้วตรวจข้อมูลก่อนทำรายการ</small>
         </div>
         <div className="gas-voice-actions">
           <button type="button" className={busy ? 'gas-voice-record recording' : 'gas-voice-record'}
-            disabled={!supported || !secure || stopping} aria-pressed={busy} onClick={busy ? stop : start}>
+            disabled={!supported || !secure || stopping || interpreting} aria-pressed={busy} onClick={busy ? stop : start}>
             <span className="material-symbols-outlined" aria-hidden="true">{busy ? 'stop_circle' : 'mic'}</span>
             {stopping ? 'กำลังแปลงเสียง…' : busy ? 'พูดเสร็จแล้ว' : 'แตะเพื่อพูด'}
           </button>
@@ -203,17 +258,19 @@ export default function GasVoiceInput({ onApply, onBusyChange }: GasVoiceInputPr
       </div>
       <label className="field">
         <span>ข้อความที่พูด · แก้ไขหรือพิมพ์เองได้</span>
-        <textarea value={text} disabled={busy} rows={2} onChange={(event) => { setText(event.target.value); setFeedback(null); }}
+        <textarea value={text} disabled={locked} rows={2} onChange={(event) => { setText(event.target.value); setFeedback(null); }}
           placeholder="ปตท. ถังใหญ่ 2 ถัง ถังเล็ก 1 ถัง ส่งที่หลังวัด" />
       </label>
       <div className="gas-voice-footer">
         <p role="status" aria-live="polite" className={feedback?.ok ? 'gas-voice-feedback success' : 'gas-voice-feedback'}>
-          {busy ? stopping ? 'รอข้อความจากบริการเสียง…' : 'กำลังฟัง… พูดยี่ห้อ ขนาด จำนวน และจุดส่ง' : feedback?.message ?? 'บอกได้หลายขนาด · ถังใหญ่ = 15 กก. · ถังเล็ก = 4 กก. · ไม่บอกจำนวน = ขนาดละ 1 ถัง'}
+          {interpreting ? 'AI กำลังแยกออร์เดอร์…' : busy ? stopping ? 'รอข้อความจากบริการเสียง…' : 'กำลังฟัง… พูดยี่ห้อ ขนาด จำนวน และจุดส่ง' : feedback?.message ?? 'บอกได้หลายขนาด · ถังใหญ่ = 15 กก. · ถังเล็ก = 4 กก. · ไม่บอกจำนวน = ขนาดละ 1 ถัง'}
         </p>
-        <button type="button" className="secondary-action" disabled={busy || !text.trim()} onClick={() => setFeedback(onApply(text))}>กรอกฟอร์มจากข้อความ</button>
+        {interpreting ? <button type="button" className="secondary-action" onClick={cancelInterpretation}>ยกเลิกการแยกข้อความ</button> :
+          <button type="button" className="secondary-action" disabled={locked || !text.trim()} onClick={() => void interpretAndApply(text)}>กรอกฟอร์มจากข้อความ</button>}
       </div>
       {(!supported || !secure) && <p className="gas-voice-hint">{!secure ? 'เปิดผ่าน HTTPS เพื่อใช้ไมค์บนหน้าเว็บ' : 'เบราว์เซอร์นี้ยังใช้ปุ่มพูดไม่ได้'} · แตะช่องข้อความแล้วใช้ไมค์บนคีย์บอร์ดแทนได้ จากนั้นกดกรอกฟอร์ม</p>}
       <small className="gas-voice-privacy">เสียงประมวลผลผ่านบริการของเบราว์เซอร์ ซึ่งอาจส่งเสียงไปยังผู้ให้บริการ · ร้านไม่บันทึกไฟล์เสียง</small>
+      <small className="gas-voice-privacy">{useAI ? 'ข้อความออร์เดอร์ส่งให้ Cloudflare ช่วยตีความ กรุณาตรวจข้อมูลก่อนทำรายการ' : 'ขณะนี้ใช้การแยกคำพื้นฐาน'}</small>
     </section>
   );
 }

@@ -16,6 +16,7 @@ import WarehouseStock from './components/WarehouseStock';
 import StoreSettingsPage from './components/StoreSettingsPage';
 import GasVoiceInput from './components/GasVoiceInput';
 import { gasSizeFromName, parseGasVoice, resolveVoiceGasOrder } from './gasVoice';
+import type { GasVoiceDraft } from './gasVoice';
 import { baht, errorText } from './storeOperations';
 import type { StoreSettings, TransferTotals, Transfer } from './storeOperations';
 import { summarizeTransfers, analyticsBucket } from './analytics';
@@ -3034,8 +3035,8 @@ export default function App() {
     }
   }
 
-  function applyGasVoice(text: string) {
-    const draft = parseGasVoice(text);
+  function applyGasVoice(text: string, interpreted?: GasVoiceDraft) {
+    const draft = interpreted ?? parseGasVoice(text);
     if (draft.errors.length) return { ok: false, message: `${draft.errors.join(' · ')} · ฟอร์มยังไม่เปลี่ยน` };
 
     const notes = [...draft.notes];
@@ -4485,7 +4486,7 @@ export default function App() {
           </div>
         </section>
 
-        <GasVoiceInput key={gasVoiceSession} onApply={applyGasVoice} onBusyChange={setGasVoiceBusy} />
+        <GasVoiceInput key={gasVoiceSession} api={API_BASE_URL} onApply={applyGasVoice} onBusyChange={setGasVoiceBusy} />
 
         {gasStep === 'selection' && <section className="panel gas-tank-panel">
           <PanelTitle icon="propane_tank" title="เลือกยี่ห้อแก๊ส" detail={gasNotice} />
