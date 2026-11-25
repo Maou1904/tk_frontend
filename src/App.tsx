@@ -15,7 +15,8 @@ import StockDocuments from './components/StockDocuments';
 import WarehouseStock from './components/WarehouseStock';
 import StoreSettingsPage from './components/StoreSettingsPage';
 import { baht, errorText } from './storeOperations';
-import type { StoreSettings, TransferTotals } from './storeOperations';
+import type { StoreSettings, TransferTotals, Transfer } from './storeOperations';
+import { summarizeTransfers, analyticsBucket } from './analytics';
 import './App.css';
 import './operations.css';
 
@@ -295,6 +296,7 @@ interface AnalyticsSalesResponse {
   startDate: string;
   endDate: string;
   sales: ApiSaleRecord[];
+  transfers?: Transfer[];
 }
 
 interface PrintRequest {
@@ -1360,6 +1362,7 @@ export default function App() {
   const [analyticsMonth, setAnalyticsMonth] = useState(currentMonthInput());
   const [analyticsYear, setAnalyticsYear] = useState(currentYearInput());
   const [analyticsSales, setAnalyticsSales] = useState<SaleRecord[]>([]);
+  const [analyticsTransfers, setAnalyticsTransfers] = useState<Transfer[]>([]);
   const [analyticsRange, setAnalyticsRange] = useState({ startDate: currentDateInput(), endDate: '' });
   const [analyticsNotice, setAnalyticsNotice] = useState('เลือกช่วงเวลาเพื่อดู Dashboard จากฐานข้อมูล');
   const [isAnalyticsLoading, setIsAnalyticsLoading] = useState(false);
@@ -1806,6 +1809,9 @@ export default function App() {
       return undefined;
     }
 
+    // Do not display the previous period's amounts while a new filter loads.
+    setAnalyticsSales([]);
+    setAnalyticsTransfers([]);
     let cancelled = false;
     const syncAnalytics = () => {
       setIsAnalyticsLoading(true);
@@ -1817,11 +1823,12 @@ export default function App() {
 
           const records = response.data.sales.map(normalizeSaleRecord);
           setAnalyticsSales(records);
+          setAnalyticsTransfers(response.data.transfers ?? []);
           setAnalyticsRange({
             startDate: response.data.startDate,
             endDate: response.data.endDate,
           });
-          setAnalyticsNotice(`${records.length} รายการจาก sales + topup`);
+          setAnalyticsNotice(`${records.length} บิลขาย · ${response.data.transfers?.length ?? 0} รายการรับโอน`);
         })
         .catch(() => {
           if (!cancelled) {
@@ -1973,13 +1980,15 @@ export default function App() {
     () => analyticsSales.filter((sale) => !isCancelledStatus(sale.status)),
     [analyticsSales],
   );
+  const transferSummary = useMemo(() => summarizeTransfers(analyticsTransfers), [analyticsTransfers]);
   const analyticsSaleCount = analyticsSales.length;
   const analyticsTotal = analyticsRevenueSales.reduce((sum, sale) => sum + sale.total, 0);
+  const analyticsCombinedTotal = analyticsTotal + transferSummary.fee / 100;
   const analyticsItemCount = analyticsRevenueSales.reduce(
     (sum, sale) => sum + sale.items.reduce((itemSum, item) => itemSum + item.quantity, 0),
     0,
   );
-  const analyticsAverageBill = analyticsSaleCount > 0 ? analyticsTotal / analyticsSaleCount : 0;
+  const analyticsAverageBill = analyticsRevenueSales.length > 0 ? analyticsTotal / analyticsRevenueSales.length : 0;
   const analyticsDiscountTotal = analyticsRevenueSales.reduce((sum, sale) => sum + sale.discount, 0);
   const analyticsSuccessfulCount = analyticsRevenueSales.filter((sale) =>
     isCompletedStatus(sale.status),
@@ -2016,10 +2025,13 @@ export default function App() {
       });
     });
 
+    if (transferSummary.count > 0) {
+      totals.set('ค่าบริการรับโอน (เงินสด)', { total: transferSummary.fee / 100, count: transferSummary.count });
+    }
     return Array.from(totals.entries())
       .map(([method, summary]) => ({ method, ...summary }))
       .sort((a, b) => b.total - a.total);
-  }, [analyticsRevenueSales]);
+  }, [analyticsRevenueSales, transferSummary]);
   const categorySales = useMemo(() => {
     const totals = new Map<string, number>();
 
@@ -2036,12 +2048,13 @@ export default function App() {
       });
     });
 
+    if (transferSummary.count > 0) totals.set('ค่าบริการรับโอน', transferSummary.fee / 100);
     const maxValue = Math.max(1, ...totals.values());
     return Array.from(totals.entries())
       .map(([label, value]) => ({ label, value, percent: Math.round((value / maxValue) * 100) }))
       .sort((a, b) => b.value - a.value)
       .slice(0, 6);
-  }, [analyticsRevenueSales, stockItems]);
+  }, [analyticsRevenueSales, stockItems, transferSummary]);
   const staffPerformance = useMemo(() => {
     const totals = new Map<string, { total: number; count: number }>();
 
@@ -2053,35 +2066,28 @@ export default function App() {
       });
     });
 
+    transferSummary.active.forEach((record) => {
+      const name = record.staff || 'ไม่ระบุ';
+      const current = totals.get(name) ?? { total: 0, count: 0 };
+      totals.set(name, { total: current.total + record.fee / 100, count: current.count + 1 });
+    });
     return Array.from(totals.entries())
       .map(([name, summary]) => ({ name, ...summary }))
       .sort((a, b) => b.total - a.total);
-  }, [analyticsRevenueSales]);
+  }, [analyticsRevenueSales, transferSummary]);
   const analyticsTrendRows = useMemo(() => {
     const buckets = new Map<string, { key: string; label: string; total: number; count: number }>();
 
-    analyticsRevenueSales.forEach((sale) => {
-      const saleDate = sale.createdAt;
-      const key = analyticsPeriod === 'day'
-        ? `${String(saleDate.getHours()).padStart(2, '0')}:00`
-        : analyticsPeriod === 'month'
-          ? dateInputValue(saleDate)
-          : monthInputValue(saleDate);
-      const label = analyticsPeriod === 'day'
-        ? key
-        : analyticsPeriod === 'month'
-          ? new Intl.DateTimeFormat('th-TH', { day: '2-digit', month: 'short' }).format(saleDate)
-          : new Intl.DateTimeFormat('th-TH', { month: 'short' }).format(saleDate);
+    const addToBucket = (date: Date, amount: number) => {
+      const { key, label } = analyticsBucket(date, analyticsPeriod);
       const current = buckets.get(key) ?? { key, label, total: 0, count: 0 };
-      buckets.set(key, {
-        ...current,
-        total: current.total + sale.total,
-        count: current.count + 1,
-      });
-    });
+      buckets.set(key, { ...current, total: current.total + amount, count: current.count + 1 });
+    };
+    analyticsRevenueSales.forEach((sale) => addToBucket(sale.createdAt, sale.total));
+    transferSummary.active.forEach((record) => addToBucket(new Date(record.createdAt), record.fee / 100));
 
     return Array.from(buckets.values()).sort((a, b) => a.key.localeCompare(b.key));
-  }, [analyticsPeriod, analyticsRevenueSales]);
+  }, [analyticsPeriod, analyticsRevenueSales, transferSummary]);
   const analyticsMaxTrendTotal = Math.max(1, ...analyticsTrendRows.map((row) => row.total));
   const analyticsRangeLabel = analyticsPeriod === 'day'
     ? analyticsDate
@@ -3922,7 +3928,15 @@ export default function App() {
       ['สร้างไฟล์เมื่อ', generatedAt],
       [],
       ['ตัวชี้วัด', 'ค่า'],
-      ['ยอดขายรวม', analyticsTotal],
+      ['ยอดขายและค่าบริการ', analyticsCombinedTotal],
+      ['ยอดขาย', analyticsTotal],
+      ['ค่าบริการรับโอน', transferSummary.fee / 100],
+      ['ยอดโอนให้ลูกค้า', transferSummary.principal / 100],
+      ['รายการรับโอนสำเร็จ', transferSummary.count],
+      ['รายการรับโอนยกเลิก', transferSummary.cancelled],
+      ['เงินสดรับจากบริการโอน', transferSummary.cashReceived / 100],
+      ['เงินทอนจากบริการโอน', transferSummary.change / 100],
+      ['เงินสดสุทธิที่รับจากบริการโอน', transferSummary.cashNet / 100],
       ['จำนวนบิล', analyticsSaleCount],
       ['ยอดเฉลี่ยต่อบิล', Math.round(analyticsAverageBill * 100) / 100],
       ['จำนวนชิ้นที่ขาย', analyticsItemCount],
@@ -3934,23 +3948,24 @@ export default function App() {
       ['มูลค่าสต็อกประมาณ', stockValue],
       ['มูลค่าหวยคงเหลือ', possibleLotteryRevenue],
       [],
-      ['ช่องทาง', 'จำนวนบิล', 'ยอดขาย'],
+      ['ช่องทาง', 'จำนวนรายการ', 'ยอดขายและค่าบริการ'],
       ...saleChannels.map((channel) => [
         saleChannelMeta[channel].label,
         analyticsChannelTotals[channel].count,
         analyticsChannelTotals[channel].total,
       ]),
+      ['รับโอนเงิน (ค่าบริการ)', transferSummary.count, transferSummary.fee / 100],
       [],
-      ['การชำระเงิน', 'จำนวนบิล', 'ยอดขาย'],
+      ['การชำระเงิน', 'จำนวนรายการ', 'ยอดขายและค่าบริการ'],
       ...analyticsPaymentTotals.map((payment) => [payment.method, payment.count, payment.total]),
       [],
-      ['Trend', 'จำนวนบิล', 'ยอดขาย'],
+      ['Trend', 'จำนวนรายการ', 'ยอดขายและค่าบริการ'],
       ...analyticsTrendRows.map((row) => [row.label, row.count, row.total]),
       [],
-      ['หมวดขายดี', 'ยอดขาย'],
+      ['หมวดและบริการ', 'ยอดขายและค่าบริการ'],
       ...categorySales.map((category) => [category.label, category.value]),
       [],
-      ['ผลงานพนักงาน', 'จำนวนบิล', 'ยอดขาย'],
+      ['ผลงานพนักงาน', 'จำนวนรายการ', 'ยอดขายและค่าบริการ'],
       ...staffPerformance.map((staff) => [staff.name, staff.count, staff.total]),
     ];
     const salesRows: Array<Array<string | number>> = [
@@ -3995,9 +4010,15 @@ export default function App() {
         excelWorksheet('Summary', summaryRows),
         excelWorksheet('Sales', salesRows),
         excelWorksheet('Items', itemRows),
+        excelWorksheet('Transfers', [
+          ['วันที่เวลา', 'เลขที่', 'ผู้บันทึก', 'ธนาคาร', 'ยอดโอน', 'ค่าบริการ', 'เงินสดรับ', 'เงินทอน', 'สถานะ', 'เหตุผลยกเลิก', 'หมายเหตุ'],
+          ...analyticsTransfers.map((record) => [formatReceiptDateTime(new Date(record.createdAt)), record.id, record.staff, record.bank,
+            record.principal / 100, record.fee / 100, record.cashReceived / 100, record.change / 100,
+            record.cancelledAt ? 'ยกเลิก' : 'สำเร็จ', record.cancelReason ?? '', record.note]),
+        ]),
       ],
     );
-    setAnalyticsNotice(`ส่งออก Excel ${analyticsSales.length} รายการแล้ว`);
+    setAnalyticsNotice(`ส่งออก Excel ${analyticsSales.length} บิลขายและ ${analyticsTransfers.length} รายการรับโอนแล้ว`);
   }
 
   function renderPosCheckout() {
@@ -4999,11 +5020,11 @@ export default function App() {
         : 'รายปี';
 
     return (
-      <div className="analytics-page">
+      <div className="analytics-page" aria-busy={isAnalyticsLoading}>
         <section className="analytics-toolbar panel">
           <div>
             <h2>Analytics Dashboard</h2>
-            <p>{periodLabel} {analyticsRangeLabel} | {analyticsNotice}</p>
+            <p>{periodLabel} {analyticsRangeLabel} | {isAnalyticsLoading ? 'กำลังโหลดข้อมูล…' : analyticsNotice}</p>
           </div>
           <div className="analytics-controls">
             <div className="segmented analytics-period-tabs">
@@ -5037,17 +5058,17 @@ export default function App() {
 
         <div className="metric-grid analytics-metric-grid">
           <div className="metric-card">
-            <span>ยอดขายรวม</span>
-            <strong>{formatMoney(analyticsTotal)}</strong>
-            <small>{analyticsSaleCount} บิลในช่วงที่เลือก</small>
+            <span>ยอดขายและค่าบริการ</span>
+            <strong>{formatMoney(analyticsCombinedTotal)}</strong>
+            <small>ขาย {formatMoney(analyticsTotal)} + ค่าบริการ {baht(transferSummary.fee)}</small>
           </div>
           <div className="metric-card success">
-            <span>บิลสำเร็จ</span>
+            <span>บิลขายสำเร็จ</span>
             <strong>{analyticsSuccessfulCount}</strong>
             <small>ค้าง {analyticsPendingCount} | ยกเลิก {analyticsCancelledCount}</small>
           </div>
           <div className="metric-card blue">
-            <span>ยอดเฉลี่ยต่อบิล</span>
+            <span>ยอดเฉลี่ยต่อบิลขาย</span>
             <strong>{formatMoney(analyticsAverageBill)}</strong>
             <small>{analyticsItemCount} ชิ้นทั้งหมด</small>
           </div>
@@ -5077,11 +5098,27 @@ export default function App() {
               </div>
             );
           })}
+          <div className="analytics-channel-card analytics-transfer-channel">
+            <span className="sale-channel transfer"><Icon name="currency_exchange" /> รับโอนเงิน</span>
+            <strong>{baht(transferSummary.fee)}</strong>
+            <small>ค่าบริการ · {transferSummary.count} รายการสำเร็จ</small>
+          </div>
+        </section>
+
+        <section className="panel analytics-transfer-summary" aria-label="สรุปบริการรับโอนเงิน">
+          <PanelTitle icon="currency_exchange" title="บริการรับโอนเงิน" detail="ยอดรวมและกราฟรวมเฉพาะค่าบริการรับโอน" />
+          <div className="analytics-transfer-metrics">
+            <div><span>ยอดโอนให้ลูกค้า</span><strong>{baht(transferSummary.principal)}</strong></div>
+            <div><span>ค่าบริการรับโอน</span><strong>{baht(transferSummary.fee)}</strong></div>
+            <div><span>รายการรับโอนสำเร็จ</span><strong>{transferSummary.count} รายการ</strong></div>
+            <div><span>เงินสดสุทธิที่รับ</span><strong>{baht(transferSummary.cashNet)}</strong></div>
+          </div>
+          <p className="analytics-transfer-note">เงินสดรับ {baht(transferSummary.cashReceived)} · เงินทอน {baht(transferSummary.change)} · ยกเลิก {transferSummary.cancelled} รายการ</p>
         </section>
 
         <section className="analytics-dashboard-grid">
           <section className="panel">
-            <PanelTitle icon="show_chart" title={`ยอดขายตาม${analyticsPeriod === 'day' ? 'ชั่วโมง' : analyticsPeriod === 'month' ? 'วัน' : 'เดือน'}`} detail={analyticsRange.startDate ? `${analyticsRange.startDate} ถึง ${analyticsRange.endDate}` : undefined} />
+            <PanelTitle icon="show_chart" title={`ยอดขายและค่าบริการตาม${analyticsPeriod === 'day' ? 'ชั่วโมง' : analyticsPeriod === 'month' ? 'วัน' : 'เดือน'}`} detail={analyticsRange.startDate ? `${analyticsRange.startDate} ถึง ${analyticsRange.endDate}` : undefined} />
             <div className="bar-list analytics-trend-list">
               {analyticsTrendRows.length === 0 ? (
                 <EmptyState text="ยังไม่มีรายการขายในช่วงนี้" />
@@ -5096,7 +5133,7 @@ export default function App() {
           </section>
 
           <section className="panel">
-            <PanelTitle icon="bar_chart" title="หมวดขายดี" />
+            <PanelTitle icon="bar_chart" title="ยอดตามหมวดและบริการ" />
             <div className="bar-list">
               {categorySales.length === 0 ? (
                 <EmptyState text="ยังไม่มีรายการขายในช่วงนี้" />
@@ -5120,7 +5157,7 @@ export default function App() {
               ) : analyticsPaymentTotals.map((payment) => (
                 <div key={payment.method}>
                   <strong>{payment.method}</strong>
-                  <span>{payment.count} บิล</span>
+                  <span>{payment.count} รายการ</span>
                   <b>{formatMoney(payment.total)}</b>
                 </div>
               ))}
@@ -5135,7 +5172,7 @@ export default function App() {
               ) : staffPerformance.map((staff) => (
                 <div key={staff.name}>
                   <strong>{staff.name}</strong>
-                  <span>{staff.count} บิล</span>
+                  <span>{staff.count} รายการ</span>
                   <b>{formatMoney(staff.total)}</b>
                 </div>
               ))}
@@ -5158,6 +5195,26 @@ export default function App() {
               {lowStockCount === 0 && <EmptyState text="ยังไม่มีสินค้าใกล้หมด" />}
             </div>
           </section>
+        </section>
+
+        <section className="panel analytics-transfer-panel">
+          <PanelTitle icon="currency_exchange" title="รายการรับโอนเงิน" detail={`${analyticsTransfers.length} รายการ | ${periodLabel} ${analyticsRangeLabel}`} />
+          <div className="analytics-sales-table">
+            {analyticsTransfers.length === 0 ? <EmptyState text="ยังไม่มีรายการรับโอนในช่วงนี้" /> : (
+              <table>
+                <thead><tr><th>วันที่เวลา</th><th>ธนาคาร</th><th>ผู้บันทึก</th><th>ยอดโอน</th><th>ค่าบริการ</th><th>เงินสดรับ</th><th>เงินทอน</th><th>สถานะ</th></tr></thead>
+                <tbody>{analyticsTransfers.map((record) => (
+                  <tr key={record.id}>
+                    <td>{formatReceiptDateTime(new Date(record.createdAt))}</td>
+                    <td>{record.bank || '—'}</td><td>{record.staff}</td>
+                    <td>{baht(record.principal)}</td><td>{baht(record.fee)}</td>
+                    <td>{baht(record.cashReceived)}</td><td>{baht(record.change)}</td>
+                    <td><span className={`badge ${record.cancelledAt ? 'danger' : 'success'}`}>{record.cancelledAt ? 'ยกเลิก' : 'สำเร็จ'}</span>{record.cancelReason && <small>{record.cancelReason}</small>}</td>
+                  </tr>
+                ))}</tbody>
+              </table>
+            )}
+          </div>
         </section>
 
         <section className="panel analytics-sales-panel">

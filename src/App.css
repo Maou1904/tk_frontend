@@ -1842,6 +1842,27 @@ th:last-child {
   grid-template-columns: repeat(3, minmax(0, 1fr));
 }
 
+.analytics-transfer-metrics {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 1rem;
+}
+
+.analytics-transfer-metrics > div {
+  display: grid;
+  gap: 0.4rem;
+}
+
+.analytics-transfer-metrics strong {
+  color: var(--color-primary-dark);
+  font-size: 1.4rem;
+}
+
+.analytics-transfer-note {
+  margin: 1rem 0 0;
+  color: var(--color-muted);
+}
+
 .analytics-dashboard-grid {
   grid-template-columns: minmax(0, 1.1fr) minmax(0, 0.9fr);
 }
