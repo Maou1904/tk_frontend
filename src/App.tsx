@@ -179,6 +179,8 @@ interface ClosingCheck {
 }
 
 type GasStockKind = 'FULL' | 'EMPTY';
+type GasBrand = 'สยาม' | 'ปตท';
+const GAS_BRANDS: readonly GasBrand[] = ['สยาม', 'ปตท'];
 
 interface ClosingSummary {
   session: AppSessionResponse;
@@ -263,6 +265,7 @@ interface ClosingSummary {
 
 interface ApiGasItem {
   id: string;
+  brand?: GasBrand | '';
   name: string;
   operation: GasItem['operation'];
   price: number | string;
@@ -343,6 +346,7 @@ interface StaffMember {
 
 interface GasItem {
   id: string;
+  brand: GasBrand | '';
   name: string;
   operation: string;
   price: number;
@@ -1079,6 +1083,7 @@ function normalizeGasItem(item: ApiGasItem): GasItem {
   const totalStock = Number(item.totalStock ?? item.total_stock ?? fullStock + emptyStock);
   return {
     id: item.id,
+    brand: item.brand === 'สยาม' || item.brand === 'ปตท' ? item.brand : '',
     name: item.name,
     operation: item.operation,
     price: Number(item.price),
@@ -1237,7 +1242,7 @@ export default function App() {
   const [amountBuffer, setAmountBuffer] = useState('');
   const [gasStep, setGasStep] = useState<'selection' | 'delivery'>('selection');
   const [lotteryTab, setLotteryTab] = useState<'keypad' | 'map'>('keypad');
-  const [gasBrand, setGasBrand] = useState('');
+  const [gasBrand, setGasBrand] = useState<GasBrand | ''>('');
   const [posCheckoutOpen, setPosCheckoutOpen] = useState(false);
   const [posAmountField, setPosAmountField] = useState<PosAmountField | null>(null);
   const [mobileScannerOpen, setMobileScannerOpen] = useState(false);
@@ -1308,6 +1313,7 @@ export default function App() {
   const [gasPendingReturnQuantities, setGasPendingReturnQuantities] = useState<Record<string, number>>({});
   const [gasItemDraft, setGasItemDraft] = useState({
     id: '',
+    brand: '' as GasBrand | '',
     name: '',
     operation: 'ขายแก๊ส',
     price: '',
@@ -1916,11 +1922,13 @@ export default function App() {
   const posTotal = Math.max(0, posSubtotal - billDiscount);
   const posChange = posPayment === 'เงินสด' ? Math.max(0, cashReceived - posTotal) : 0;
 
+  const visibleGasItems = gasItems.filter((item) => item.brand === gasBrand);
   const gasOrderItems = useMemo(
     () => gasItems
+      .filter((item) => item.brand === gasBrand)
       .map((item) => ({ ...item, quantity: gasQuantities[item.id] ?? 0 }))
       .filter((item) => item.quantity > 0),
-    [gasItems, gasQuantities],
+    [gasItems, gasQuantities, gasBrand],
   );
   const gasSelectedCount = gasOrderItems.reduce((sum, item) => sum + item.quantity, 0);
   const gasSubtotal = gasOrderItems.reduce((sum, item) => sum + item.price * item.quantity, 0);
@@ -2966,9 +2974,17 @@ export default function App() {
     }
   }
 
+  function selectGasBrand(brand: GasBrand) {
+    if (brand === gasBrand) return;
+    setGasBrand(brand);
+    setGasQuantities({});
+    setGasReturnedTankQuantity(0);
+    setGasNotice('');
+  }
+
   function updateGasQuantity(id: string, delta: number) {
     const gasItem = gasItems.find((item) => item.id === id);
-    if (!gasItem) {
+    if (!gasItem || gasItem.brand !== gasBrand) {
       return;
     }
 
@@ -3585,6 +3601,11 @@ export default function App() {
       return;
     }
 
+    const brand = gasItemDraft.brand;
+    if (!brand) {
+      setApiStatus('กรุณาเลือกยี่ห้อแก๊ส');
+      return;
+    }
     const id = gasItemDraft.id.trim().toUpperCase();
     const name = gasItemDraft.name.trim();
     const operation = gasItemDraft.operation.trim() || 'ขายแก๊ส';
@@ -3601,6 +3622,7 @@ export default function App() {
     try {
       const response = await axios.post<ApiGasItem>(`${API_BASE_URL}/api/gas/items`, {
         id,
+        brand,
         name,
         operation,
         price,
@@ -3616,6 +3638,7 @@ export default function App() {
       setGasCorrectionItemId(gasItem.id);
       setGasItemDraft({
         id: '',
+        brand,
         name: '',
         operation,
         price: '',
@@ -3626,6 +3649,20 @@ export default function App() {
       setApiStatus(`เพิ่มแก๊ส ${gasItem.name} ลง tingkum_db แล้ว`);
     } catch {
       setApiStatus('เพิ่มรายการแก๊สไม่สำเร็จ');
+    }
+  }
+
+  async function updateGasItemBrand(item: GasItem, brand: GasBrand) {
+    if (!isOwner || !GAS_BRANDS.includes(brand)) return;
+    try {
+      await axios.patch(`${API_BASE_URL}/api/gas/items/${encodeURIComponent(item.id)}`, {
+        brand, reason: 'กำหนดยี่ห้อถังแก๊ส',
+      });
+      setGasQuantities({});
+      await refreshGasItems();
+      setApiStatus(`กำหนดยี่ห้อ ${item.name} เป็น${brand}แล้ว`);
+    } catch {
+      setApiStatus('กำหนดยี่ห้อแก๊สไม่สำเร็จ');
     }
   }
 
@@ -4314,12 +4351,12 @@ export default function App() {
 
         {gasStep === 'selection' && <section className="panel gas-tank-panel">
           <PanelTitle icon="propane_tank" title="เลือกยี่ห้อแก๊ส" detail={gasNotice} />
-          <div className="touch-options gas-brands">{['สยาม','ปตท'].map(brand => <button key={brand} aria-pressed={gasBrand === brand} onClick={() => setGasBrand(brand)}><img src={brand === 'สยาม' ? '/brands/siam.png' : '/brands/ptt.svg'} alt=""/>{brand}</button>)}</div>
+          <div className="touch-options gas-brands">{GAS_BRANDS.map(brand => <button key={brand} aria-pressed={gasBrand === brand} onClick={() => selectGasBrand(brand)}><img src={brand === 'สยาม' ? '/brands/siam.png' : '/brands/ptt.svg'} alt=""/>{brand}</button>)}</div>
           {gasBrand && <h3>เลือกขนาดถัง · {gasBrand}</h3>}
           <div className="gas-tank-grid">
-            {!gasBrand ? null : gasItems.length === 0 ? (
-              <EmptyState text="ยังไม่มีขนาดถังแก๊สใน tingkum_db" />
-            ) : gasItems.map((item) => (
+            {!gasBrand ? null : visibleGasItems.length === 0 ? (
+              <EmptyState text={`ยังไม่มีถังยี่ห้อ${gasBrand} ไปเพิ่มหรือกำหนดยี่ห้อที่เมนูสต็อก`} />
+            ) : visibleGasItems.map((item) => (
               <div
                 className={`gas-tank-card ${(gasQuantities[item.id] ?? 0) > 0 ? 'selected' : ''}`}
                 key={item.id}
@@ -4368,6 +4405,7 @@ export default function App() {
               </div>
             ))}
           </div>
+          {gasItems.some((item) => !item.brand) && <p role="status">มีถังที่ยังไม่ระบุยี่ห้อ กรุณากำหนดยี่ห้อที่เมนูสต็อกก่อนขาย</p>}
           <button className="primary-action gas-next" disabled={!gasSelectedCount} onClick={() => setGasStep('delivery')}>ถัดไป · กรอกรายละเอียด</button>
         </section>}
 
@@ -5372,6 +5410,13 @@ export default function App() {
           <PanelTitle icon="propane_tank" title="Stock แก๊ส" detail={`${gasItems.length} รายการจาก tingkum_db`} />
           <div className="new-product-grid gas-stock-form">
             <label className="field">
+              <span>ยี่ห้อแก๊ส</span>
+              <select value={gasItemDraft.brand} onChange={(event) => setGasItemDraft({ ...gasItemDraft, brand: event.target.value as GasBrand })}>
+                <option value="" disabled>เลือกยี่ห้อ</option>
+                {GAS_BRANDS.map((brand) => <option key={brand} value={brand}>{brand}</option>)}
+              </select>
+            </label>
+            <label className="field">
               <span>รหัสถัง</span>
               <input
                 value={gasItemDraft.id}
@@ -5447,7 +5492,8 @@ export default function App() {
                 <thead>
                   <tr>
                     <th>ถังแก๊ส</th>
-                    <th>ประเภท</th>
+                    <th>ยี่ห้อ</th>
+                    <th>ประเภท/ขนาด</th>
                     <th>ราคา</th>
                     <th>ถังเต็ม</th>
                     <th>ถังเปล่า</th>
@@ -5462,6 +5508,12 @@ export default function App() {
                       <td>
                         <strong>{item.name}</strong>
                         <small>{item.id}</small>
+                      </td>
+                      <td>
+                        <select aria-label={`ยี่ห้อ ${item.name}`} value={item.brand} disabled={!isOwner} onChange={(event) => updateGasItemBrand(item, event.target.value as GasBrand)}>
+                          <option value="" disabled>ยังไม่ระบุ</option>
+                          {GAS_BRANDS.map((brand) => <option key={brand} value={brand}>{brand}</option>)}
+                        </select>
                       </td>
                       <td>{item.operation}</td>
                       <td>{formatMoney(item.price)}</td>
