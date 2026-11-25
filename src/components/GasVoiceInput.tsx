@@ -189,7 +189,7 @@ export default function GasVoiceInput({ onApply, onBusyChange }: GasVoiceInputPr
       <div className="gas-voice-heading">
         <div>
           <h3 id="gas-voice-title">พูดรับออร์เดอร์แก๊ส <span>ทดลอง</span></h3>
-          <p>“ส่งแก๊สถังใหญ่ บ้านคุณสมชาย ปตท.”</p>
+          <p>“ปตท. ถังใหญ่ 2 ถัง ถังเล็ก 1 ถัง ส่งที่หลังวัด”</p>
           <small>พูดครั้งเดียวเพื่อกรอกฟอร์ม แล้วตรวจข้อมูลก่อนทำรายการ</small>
         </div>
         <div className="gas-voice-actions">
@@ -204,11 +204,11 @@ export default function GasVoiceInput({ onApply, onBusyChange }: GasVoiceInputPr
       <label className="field">
         <span>ข้อความที่พูด · แก้ไขหรือพิมพ์เองได้</span>
         <textarea value={text} disabled={busy} rows={2} onChange={(event) => { setText(event.target.value); setFeedback(null); }}
-          placeholder="ส่งแก๊ส ปตท. ถังใหญ่ 1 ถัง บ้านคุณสมชาย" />
+          placeholder="ปตท. ถังใหญ่ 2 ถัง ถังเล็ก 1 ถัง ส่งที่หลังวัด" />
       </label>
       <div className="gas-voice-footer">
         <p role="status" aria-live="polite" className={feedback?.ok ? 'gas-voice-feedback success' : 'gas-voice-feedback'}>
-          {busy ? stopping ? 'รอข้อความจากบริการเสียง…' : 'กำลังฟัง… พูดยี่ห้อ ขนาด จำนวน และจุดส่ง' : feedback?.message ?? 'ถังใหญ่ = 15 กก. · ถังเล็ก = 4 กก. · ไม่บอกจำนวน = 1 ถัง'}
+          {busy ? stopping ? 'รอข้อความจากบริการเสียง…' : 'กำลังฟัง… พูดยี่ห้อ ขนาด จำนวน และจุดส่ง' : feedback?.message ?? 'บอกได้หลายขนาด · ถังใหญ่ = 15 กก. · ถังเล็ก = 4 กก. · ไม่บอกจำนวน = ขนาดละ 1 ถัง'}
         </p>
         <button type="button" className="secondary-action" disabled={busy || !text.trim()} onClick={() => setFeedback(onApply(text))}>กรอกฟอร์มจากข้อความ</button>
       </div>

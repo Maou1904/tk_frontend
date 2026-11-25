@@ -3,10 +3,14 @@
 export type VoiceGasBrand = 'สยาม' | 'ปตท';
 export type VoiceGasSize = 4 | 15;
 
-export interface GasVoiceDraft {
-  brand?: VoiceGasBrand;
+export interface GasVoiceLine {
   sizeKg?: VoiceGasSize;
   quantity?: number;
+}
+
+export interface GasVoiceDraft {
+  brand?: VoiceGasBrand;
+  items: GasVoiceLine[];
   customerName?: string;
   address?: string;
   phone?: string;
@@ -34,7 +38,8 @@ function parseCount(text: string) {
 
 function cleanText(text: string) {
   return text.replace(/^[\s,.;:]+|[\s,.;:]+$/g, '').replace(/\s+/g, ' ')
-    .replace(/(?:\s*(?:ครับ|ค่ะ|คะ|นะครับ|นะคะ|ด้วย|หน่อย))+$/u, '').trim();
+    .replace(/(?:\s*(?:ครับ|ค่ะ|คะ|นะครับ|นะคะ|ด้วย|หน่อย))+$/u, '')
+    .replace(/(?:\s+(?:และ|กับ|แล้ว))+$/u, '').trim();
 }
 
 export function gasSizeFromName(name: string): VoiceGasSize | undefined {
@@ -44,7 +49,7 @@ export function gasSizeFromName(name: string): VoiceGasSize | undefined {
 }
 
 export function parseGasVoice(text: string): GasVoiceDraft {
-  const draft: GasVoiceDraft = { notes: [], errors: [] };
+  const draft: GasVoiceDraft = { items: [], notes: [], errors: [] };
   let rest = arabicDigits(text.normalize('NFC')).trim();
   if (!rest) {
     draft.errors.push('พูดหรือพิมพ์รายการที่ต้องการก่อน');
@@ -77,41 +82,83 @@ export function parseGasVoice(text: string): GasVoiceDraft {
   if (brands.size > 1) draft.errors.push('พบทั้งสยามและ ปตท. กรุณาพูดทีละยี่ห้อ');
   else draft.brand = [...brands][0];
 
-  // "สองถังใหญ่" carries a count as well as a size. Keep the size words.
-  const quantities = new Set<number>();
-  rest = rest.replace(new RegExp(`(${countToken})\\s*(ถัง\\s*(?:ใหญ่|เล็ก))`, 'g'), (_word, count: string, size: string) => {
-    quantities.add(parseCount(count));
-    return ` ${size} `;
-  });
-  const sizes = new Set<VoiceGasSize>();
-  rest = rest.replace(/ถัง\s*(ใหญ่|เล็ก)|((?:\d+|สิบห้า|สี่))\s*(?:กิโลกรัม|กิโล|กก\.?|kg|โล)/gi, (_word, label: string | undefined, number: string | undefined) => {
-    const size = label ? (label === 'ใหญ่' ? 15 : 4) : parseCount(number!);
-    if (size === 4 || size === 15) sizes.add(size);
-    else draft.errors.push('ตัวทดลองรองรับถัง 4 และ 15 กก. กรุณาเลือกขนาดเอง');
-    return ' ';
-  });
-  if (sizes.size > 1) draft.errors.push('พบหลายขนาด กรุณาพูดทีละขนาดถัง');
-  else draft.sizeKg = [...sizes][0];
-
   // Return counts must never become the number of full cylinders being sold.
   rest = rest.replace(new RegExp(`(?:จ่ายแล้ว|ยังไม่จ่าย|ค้างจ่าย|คืนถัง(?:เปล่า)?(?:\\s*${countToken}\\s*(?:ถัง)?)?)`, 'g'), () => {
     draft.notes.push('ตรวจคนส่ง การจ่ายเงิน และจำนวนถังคืนในฟอร์มเอง');
     return ' ';
   });
-  rest = rest.replace(new RegExp(`(?:จำนวน\\s*)?(${countToken})\\s*ถัง`, 'g'), (_word, count: string) => {
-    quantities.add(parseCount(count));
-    return ' ';
-  });
-  if (quantities.size > 1) draft.errors.push('พบหลายจำนวน กรุณาพูดจำนวนถังเพียงครั้งเดียว');
-  else if (quantities.size === 1) {
-    draft.quantity = [...quantities][0];
-    if (!Number.isSafeInteger(draft.quantity) || draft.quantity < 1) draft.errors.push('จำนวนถังต้องเป็นจำนวนเต็มตั้งแต่ 1 ถัง');
-  }
   if (/(?:ครึ่ง|หลาย|ร้อย|พัน|ล้าน)\s*ถัง/.test(rest)) draft.errors.push('ยังแยกจำนวนถังไม่ได้ กรุณาระบุจำนวนเป็นตัวเลขแล้วตามด้วยคำว่าถัง');
 
-  rest = rest.replace(/^(?:\s*(?:เอ่อ|อ่า|ช่วย|ขอ|เอา|จัดส่ง|ส่งแก๊ส|ส่ง|แก๊ส)\s*)+/u, '');
+  let sharedQuantity: number | undefined;
+  rest = rest.replace(new RegExp(`อย่างละ\\s*(${countToken})(?:\\s*ถัง)?`, 'g'), (_word, count: string) => {
+    if (sharedQuantity !== undefined) draft.errors.push('พบจำนวนอย่างละซ้ำ กรุณาระบุเพียงครั้งเดียว');
+    sharedQuantity = parseCount(count);
+    return ' ';
+  });
+
+  // Keep sizes and counts in spoken order so a count belongs to its own size.
+  // Prefix counts ("สองถังใหญ่") are distinguished from suffix counts
+  // ("ถังใหญ่สองถัง") instead of collecting all numbers into a global set.
+  type Token = { start: number; end: number; kind: 'size' | 'before' | 'after'; value: number };
+  const tokens: Token[] = [];
+  for (const match of rest.matchAll(/ถัง\s*(ใหญ่|เล็ก)|(\d+|สิบห้า|สี่)\s*(?:กิโลกรัม|กิโล|กก\.?|kg|โล)/gi)) {
+    const value = match[1] ? (match[1] === 'ใหญ่' ? 15 : 4) : parseCount(match[2]);
+    if (value !== 4 && value !== 15) draft.errors.push('ตัวทดลองรองรับถัง 4 และ 15 กก. กรุณาเลือกขนาดเอง');
+    tokens.push({ start: match.index!, end: match.index! + match[0].length, kind: 'size', value });
+  }
+  for (const match of rest.matchAll(new RegExp(`(${countToken})\\s*(?=ถัง\\s*(?:ใหญ่|เล็ก))`, 'g'))) {
+    tokens.push({ start: match.index!, end: match.index! + match[0].length, kind: 'before', value: parseCount(match[1]) });
+  }
+  for (const match of rest.matchAll(new RegExp(`(?:จำนวน\\s*)?(${countToken})\\s*ถัง(?!\\s*(?:ใหญ่|เล็ก))`, 'g'))) {
+    tokens.push({ start: match.index!, end: match.index! + match[0].length, kind: 'after', value: parseCount(match[1]) });
+  }
+  tokens.sort((a, b) => a.start - b.start);
+  let current: GasVoiceLine | undefined;
+  let pendingQuantity: number | undefined;
+  for (const token of tokens) {
+    if (token.kind === 'size') {
+      // Consecutive aliases such as "ถังใหญ่ 15 กก." describe one line.
+      if (!current || current.sizeKg !== token.value || current.quantity !== undefined) {
+        current = { sizeKg: token.value as VoiceGasSize };
+        draft.items.push(current);
+      }
+      if (pendingQuantity !== undefined) {
+        current.quantity = pendingQuantity;
+        pendingQuantity = undefined;
+      }
+    } else if (token.kind === 'before' || !current) {
+      if (pendingQuantity !== undefined) draft.errors.push('จำนวนถังไม่ชัดเจน กรุณาบอกขนาดและจำนวนทีละคู่');
+      pendingQuantity = token.value;
+    } else {
+      if (current.quantity !== undefined) draft.errors.push('พบหลายจำนวนสำหรับขนาดเดียว กรุณาระบุจำนวนต่อขนาดเพียงครั้งเดียว');
+      current.quantity = token.value;
+    }
+  }
+  if (pendingQuantity !== undefined) {
+    if (draft.items.length) draft.errors.push('จำนวนถังไม่ชัดเจน กรุณาบอกขนาดและจำนวนทีละคู่');
+    else draft.items.push({ quantity: pendingQuantity });
+  }
+  if (sharedQuantity !== undefined && !draft.items.length) draft.items.push({});
+  for (const line of draft.items) {
+    if (sharedQuantity !== undefined) {
+      if (line.quantity !== undefined && line.quantity !== sharedQuantity) draft.errors.push('จำนวนอย่างละไม่ตรงกับจำนวนรายขนาด กรุณาระบุใหม่');
+      line.quantity = sharedQuantity;
+    }
+    if (line.quantity !== undefined && (!Number.isSafeInteger(line.quantity) || line.quantity < 1)) draft.errors.push('จำนวนถังต้องเป็นจำนวนเต็มตั้งแต่ 1 ถัง');
+  }
+  const sizes = draft.items.map((line) => line.sizeKg).filter((size) => size !== undefined);
+  if (new Set(sizes).size !== sizes.length) draft.errors.push('พบขนาดเดิมซ้ำ กรุณารวมจำนวนของแต่ละขนาดแล้วพูดใหม่');
+  for (const token of [...tokens].reverse()) rest = rest.slice(0, token.start) + ' ' + rest.slice(token.end);
+
+  rest = rest.replace(/^(?:\s*(?:เอ่อ|อ่า|ช่วย|ขอ|เอา|จัดส่ง(?!ที่)|ส่งแก๊ส|ส่ง(?!ที่)|แก๊ส)\s*)+/u, '');
   rest = cleanText(rest);
 
+  const recipient = rest.match(/(?:ให้|ถึง)\s*((?:คุณ|ป้า|ลุง|น้า|พี่|นาย|นางสาว|นาง|เจ๊|ช่าง)\s*.+?)(?=ที่|\s+(?:บ้าน|ร้าน|ซอย|หมู่บ้าน)|$)/u);
+  if (recipient) {
+    draft.customerName = cleanText(recipient[1]);
+    rest = rest.replace(recipient[0], ' ');
+    rest = rest.replace(/^\s*ที่\s*/u, 'ส่งที่ ');
+  }
   const named = rest.match(new RegExp(`(?:ชื่อลูกค้า|ลูกค้าชื่อ|ลูกค้า|ชื่อ)\\s*(.+?)(?=\\s*${locationStart}|$)`, 'u'));
   if (named) {
     draft.customerName = cleanText(named[1]);
@@ -124,8 +171,10 @@ export function parseGasVoice(text: string): GasVoiceDraft {
       const houseName = draft.address.match(/^(?:บ้าน|ร้าน)\s*((?:คุณ|ป้า|ลุง|น้า|พี่|นาย|นางสาว|นาง)\s*.+?)(?=\s|หลังวัด|ข้าง|ตรงข้าม|ใกล้|ซอย|หมู่|เลขที่|$)/u);
       if (houseName) draft.customerName = cleanText(houseName[1]);
     }
+    // A location-only order uses the destination as its customer label too.
+    if (!draft.customerName && draft.address) draft.customerName = draft.address;
   }
-  if (!draft.brand && !draft.sizeKg && !draft.quantity && !draft.customerName && !draft.address && !draft.phone) {
+  if (!draft.brand && !draft.items.length && !draft.customerName && !draft.address && !draft.phone) {
     draft.errors.push('ยังแยกรายการไม่ได้ ลองพูดว่า ส่งแก๊ส ปตท. ถังใหญ่ บ้านคุณสมชาย');
   }
   return draft;
@@ -146,4 +195,22 @@ export function resolveVoiceGasItem<T extends VoiceGasItem>(items: T[], brand: V
   const item = matches[0];
   if (quantity > item.stock) return { error: `${item.name} เหลือ ${item.stock} ถัง ไม่พอสำหรับ ${quantity} ถัง` };
   return { item };
+}
+
+// Resolve every size before the caller changes any form state.
+export function resolveVoiceGasOrder<T extends VoiceGasItem>(items: T[], brand: VoiceGasBrand, requested: GasVoiceLine[], fallbackSize?: VoiceGasSize) {
+  const lines: Array<{ item: T; sizeKg: VoiceGasSize; quantity: number }> = [];
+  if (!requested.length) return { error: 'ระบุรายการแก๊สอย่างน้อยหนึ่งขนาด' };
+  for (const request of requested) {
+    const sizeKg = request.sizeKg ?? (requested.length === 1 ? fallbackSize : undefined);
+    if (!sizeKg) return { error: 'ระบุขนาดถังให้ครบ เช่น ถังใหญ่ 2 ถัง ถังเล็ก 1 ถัง' };
+    const quantity = request.quantity ?? 1;
+    if (!Number.isSafeInteger(quantity) || quantity < 1) return { error: 'จำนวนถังต้องเป็นจำนวนเต็มตั้งแต่ 1 ถัง' };
+    const result = resolveVoiceGasItem(items, brand, sizeKg, quantity);
+    const item = result.item;
+    if (!item) return { error: result.error };
+    if (lines.some((line) => line.item.id === item.id)) return { error: 'พบขนาดเดิมซ้ำ กรุณารวมจำนวนของแต่ละขนาดแล้วพูดใหม่' };
+    lines.push({ item, sizeKg, quantity });
+  }
+  return { lines };
 }

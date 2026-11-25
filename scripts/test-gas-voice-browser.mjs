@@ -11,6 +11,7 @@ const artifactDir = process.env.GAS_VOICE_ARTIFACT_DIR;
 if (artifactDir) await mkdir(artifactDir, { recursive: true });
 const items = [
   { id: 'ptt15', brand: 'ปตท', name: 'ถังแก๊ส 15 กก.', operation: 'ขายแก๊ส', price: 450, fullStock: 3, emptyStock: 2 },
+  { id: 'ptt4', brand: 'ปตท', name: 'ถังแก๊ส 4 กก.', operation: 'ขายแก๊ส', price: 200, fullStock: 2, emptyStock: 0 },
   { id: 'siam4', brand: 'สยาม', name: 'ถังแก๊ส 4 กก.', operation: 'ขายแก๊ส', price: 200, fullStock: 5, emptyStock: 1 },
 ];
 const staff = [{ id: 'driver1', name: 'คนส่งทดสอบ', role: 'ส่งแก๊ส', active: true, phone: '' }];
@@ -76,6 +77,35 @@ try {
   assert.equal(await page.locator('.gas-net-total strong').innerText(), '฿470.00');
   assert.equal(writes.length, 0);
 
+  // One utterance selects both sizes, with distinct quantities and one destination.
+  await page.getByRole('button', { name: 'แตะเพื่อพูด' }).click();
+  await page.evaluate(() => window.__emitVoice('ปตท ถังใหญ่ 2 ถัง ถังเล็ก 1 ถัง ส่งที่หลังวัด'));
+  assert.equal(await page.getByLabel('ชื่อลูกค้า', { exact: true }).inputValue(), 'หลังวัด');
+  assert.equal(await page.getByLabel('ชื่อที่อยู่ / จุดหมายปลายทาง').inputValue(), 'หลังวัด');
+  assert.match(await page.locator('.gas-details-panel').innerText(), /15 กก. × 2, ถังแก๊ส 4 กก. × 1/);
+  assert.equal(await page.locator('.gas-net-total strong').innerText(), '฿1,120.00');
+  assert.match(await page.locator('.gas-return-control strong').innerText(), /0 \/ 3/);
+  await applyText(page, 'ปตท ถังใหญ่ 1 ถัง ถังเล็ก 3 ถัง ส่งที่บ้านผิด');
+  assert.match(await page.locator('.gas-voice-feedback').innerText(), /ฟอร์มยังไม่เปลี่ยน/);
+  assert.match(await page.locator('.gas-details-panel').innerText(), /15 กก. × 2, ถังแก๊ส 4 กก. × 1/);
+  assert.equal(await page.getByLabel('ชื่อลูกค้า', { exact: true }).inputValue(), 'หลังวัด');
+  await applyText(page, 'ปตท ถังใหญ่กับถังเล็กอย่างละ 2 ถัง ลูกค้าคุณสมชาย ส่งที่อู่ช่างชัย');
+  assert.equal(await page.getByLabel('ชื่อลูกค้า', { exact: true }).inputValue(), 'คุณสมชาย');
+  assert.equal(await page.getByLabel('ชื่อที่อยู่ / จุดหมายปลายทาง').inputValue(), 'อู่ช่างชัย');
+  assert.match(await page.locator('.gas-details-panel').innerText(), /15 กก. × 2, ถังแก๊ส 4 กก. × 2/);
+  await page.getByLabel('เบอร์โทรศัพท์ (ถ้ามี)').fill('0812345678');
+  await applyText(page, 'ปตท ถังใหญ่ 1 ถัง ถังเล็ก 1 ถัง');
+  assert.equal(await page.getByLabel('ชื่อลูกค้า', { exact: true }).inputValue(), '');
+  assert.equal(await page.getByLabel('ชื่อที่อยู่ / จุดหมายปลายทาง').inputValue(), '');
+  assert.equal(await page.getByLabel('เบอร์โทรศัพท์ (ถ้ามี)').inputValue(), '');
+  assert.equal(await page.getByRole('button', { name: 'ทำรายการแก๊ส', exact: true }).isDisabled(), true);
+  await applyText(page, 'ส่งแก๊ส ปตท ถังใหญ่ บ้านคุณสมชาย');
+
+  await applyText(page, 'ส่งปตทถังใหญ่ 1 ถังให้คุณเจเจที่ดอนภูตา');
+  assert.equal(await page.getByLabel('ชื่อลูกค้า', { exact: true }).inputValue(), 'คุณเจเจ');
+  assert.equal(await page.getByLabel('ชื่อที่อยู่ / จุดหมายปลายทาง').inputValue(), 'ดอนภูตา');
+  await applyText(page, 'ส่งแก๊ส ปตท ถังใหญ่ บ้านคุณสมชาย');
+
   // Stop processes final text exactly once; interim speech alone cannot fill a form.
   await page.getByRole('button', { name: 'แตะเพื่อพูด' }).click();
   assert.equal(await page.getByRole('button', { name: 'ทำรายการแก๊ส', exact: true }).isDisabled(), true);
@@ -85,10 +115,10 @@ try {
   assert.equal(await page.getByLabel('ชื่อลูกค้า', { exact: true }).inputValue(), 'ป้าสมศรี');
   await page.getByLabel('เบอร์โทรศัพท์ (ถ้ามี)').fill('0812345678');
   await applyText(page, 'ส่งแก๊ส ปตท ถังใหญ่ ส่งที่หลังวัด');
-  assert.equal(await page.getByLabel('ชื่อลูกค้า', { exact: true }).inputValue(), '');
+  assert.equal(await page.getByLabel('ชื่อลูกค้า', { exact: true }).inputValue(), 'หลังวัด');
   assert.equal(await page.getByLabel('เบอร์โทรศัพท์ (ถ้ามี)').inputValue(), '');
   assert.equal(await page.getByLabel('ชื่อที่อยู่ / จุดหมายปลายทาง').inputValue(), 'หลังวัด');
-  assert.equal(await page.getByRole('button', { name: 'ทำรายการแก๊ส', exact: true }).isDisabled(), true);
+  assert.equal(await page.getByRole('button', { name: 'ทำรายการแก๊ส', exact: true }).isDisabled(), false);
 
   await applyText(page, 'ส่งแก๊ส ปตท ถังใหญ่ บ้านคุณสมชาย');
   for (const invalid of ['ส่งแก๊ส ปตท ถังใหญ่ 9 ถัง บ้านคุณผิด', 'ส่งแก๊ส ปตท สยาม ถังใหญ่ บ้านคุณผิด', 'ส่งแก๊ส สยาม ถังใหญ่ บ้านคุณผิด']) {

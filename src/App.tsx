@@ -15,7 +15,7 @@ import StockDocuments from './components/StockDocuments';
 import WarehouseStock from './components/WarehouseStock';
 import StoreSettingsPage from './components/StoreSettingsPage';
 import GasVoiceInput from './components/GasVoiceInput';
-import { gasSizeFromName, parseGasVoice, resolveVoiceGasItem } from './gasVoice';
+import { gasSizeFromName, parseGasVoice, resolveVoiceGasOrder } from './gasVoice';
 import { baht, errorText } from './storeOperations';
 import type { StoreSettings, TransferTotals, Transfer } from './storeOperations';
 import { summarizeTransfers, analyticsBucket } from './analytics';
@@ -3040,21 +3040,21 @@ export default function App() {
 
     const notes = [...draft.notes];
     const summary: string[] = [];
-    const wantsProduct = draft.brand !== undefined || draft.sizeKg !== undefined || draft.quantity !== undefined;
-    let selectedItem: GasItem | undefined;
-    const quantity = draft.quantity ?? 1;
+    const wantsProduct = draft.brand !== undefined || draft.items.length > 0;
+    let selectedOrder: Array<{ item: GasItem; sizeKg: 4 | 15; quantity: number }> = [];
+    const brand = draft.brand ?? (gasBrand || undefined);
     if (wantsProduct) {
-      const brand = draft.brand ?? (gasBrand || undefined);
-      const sizeKg = draft.sizeKg ?? (gasOrderItems.length === 1 ? gasSizeFromName(gasOrderItems[0].name) : undefined);
-      if (!brand || !sizeKg) return { ok: false, message: 'ระบุยี่ห้อและขนาดถังให้ครบ เช่น ปตท. ถังใหญ่ หรือเลือกถังในฟอร์มก่อน · ฟอร์มยังไม่เปลี่ยน' };
-      const result = resolveVoiceGasItem(gasItems, brand, sizeKg, quantity);
-      if (!result.item) return { ok: false, message: `${result.error} · ฟอร์มยังไม่เปลี่ยน` };
-      selectedItem = result.item;
-      summary.push(`${brand} ${sizeKg} กก. × ${quantity} ถัง`);
-      if (draft.quantity === undefined) notes.push('ไม่ได้บอกจำนวน ใช้ 1 ถัง');
+      if (!brand) return { ok: false, message: 'ระบุยี่ห้อแก๊ส เช่น ปตท. หรือสยาม หรือเลือกยี่ห้อในฟอร์มก่อน · ฟอร์มยังไม่เปลี่ยน' };
+      const requested = draft.items.length ? draft.items : [{}];
+      const fallbackSize = gasOrderItems.length === 1 ? gasSizeFromName(gasOrderItems[0].name) : undefined;
+      const result = resolveVoiceGasOrder(gasItems, brand, requested, fallbackSize);
+      if (!result.lines) return { ok: false, message: `${result.error} · ฟอร์มยังไม่เปลี่ยน` };
+      selectedOrder = result.lines;
+      summary.push(...selectedOrder.map((line) => `${brand} ${line.sizeKg} กก. × ${line.quantity} ถัง`));
+      if (requested.some((line) => line.quantity === undefined)) notes.push(requested.length > 1 ? 'ไม่ได้บอกจำนวนบางขนาด ใช้ขนาดละ 1 ถัง' : 'ไม่ได้บอกจำนวน ใช้ 1 ถัง');
     }
 
-    const changesCustomer = (draft.customerName !== undefined && draft.customerName !== gasCustomer.name)
+    const changesCustomer = wantsProduct || (draft.customerName !== undefined && draft.customerName !== gasCustomer.name)
       || (draft.address !== undefined && draft.address !== gasCustomer.address);
     // A different destination must not inherit another customer's name or phone.
     const customer = {
@@ -3062,9 +3062,9 @@ export default function App() {
       address: draft.address ?? (changesCustomer ? '' : gasCustomer.address),
       phone: draft.phone ?? (changesCustomer ? '' : gasCustomer.phone),
     };
-    if (selectedItem) {
-      setGasBrand(selectedItem.brand);
-      setGasQuantities({ [selectedItem.id]: quantity });
+    if (selectedOrder.length && brand) {
+      setGasBrand(brand);
+      setGasQuantities(Object.fromEntries(selectedOrder.map((line) => [line.item.id, line.quantity])));
       setGasReturnedTankQuantity(0);
     }
     setGasCustomer(customer);
@@ -3073,7 +3073,7 @@ export default function App() {
     if (draft.phone) summary.push(`โทร ${draft.phone}`);
     if (!customer.name) notes.push('ยังขาดชื่อลูกค้า');
     if (!customer.address) notes.push('ยังขาดจุดส่ง');
-    if (selectedItem || gasSelectedCount > 0) setGasStep('delivery');
+    if (selectedOrder.length || gasSelectedCount > 0) setGasStep('delivery');
     else notes.push('เลือกยี่ห้อและขนาดถังต่อในฟอร์ม');
     return { ok: true, message: `กรอกให้แล้ว: ${summary.join(' · ')}${notes.length ? ` · ${notes.join(' · ')}` : ''} · ตรวจข้อมูลและคนส่งก่อนกดทำรายการ` };
   }
