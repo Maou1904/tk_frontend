@@ -302,6 +302,29 @@ button:disabled {
   border-radius: 8px;
   background: var(--color-surface);
   box-shadow: 0 24px 64px rgba(16, 24, 40, 0.22);
+  max-height: calc(100dvh - 2rem);
+  overflow: auto;
+}
+
+.password-fields {
+  border: 0;
+  padding: 0;
+  margin: 0;
+  min-width: 0;
+}
+
+.password-visibility {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.password-dialog::backdrop {
+  background: rgba(23, 32, 51, 0.34);
+}
+
+.staff-account-tabs {
+  grid-column: 1 / -1;
 }
 
 .modal-head {

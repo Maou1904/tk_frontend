@@ -180,6 +180,18 @@ dialog.shop-wizard {width:min(760px,calc(100% - 1rem));max-height:92dvh;overflow
 .suffix-grid button {padding:5px;font-size:1.1rem}
 .suffix-grid small {display:block;font-size:.75rem}
 .suffix-grid button:disabled {opacity:.48}
+.lottery-stock-legend {display:flex;flex-wrap:wrap;gap:8px;margin-top:14px}
+.lottery-stock-legend span {padding:7px 12px;border:1px solid;border-radius:8px;font-weight:650}
+.lottery-stock-hint {font-size:.85rem;color:#475569;margin:8px 0}
+.suffix-grid button[data-stock-level="empty"],.lottery-stock-legend [data-stock-level="empty"] {background:#e5e7eb;color:#4b5563;border-color:#9ca3af;opacity:1}
+.suffix-grid button[data-stock-level="low"],.lottery-stock-legend [data-stock-level="low"] {background:#fee2e2;color:#991b1b;border-color:#f87171}
+.suffix-grid button[data-stock-level="medium"],.lottery-stock-legend [data-stock-level="medium"] {background:#fef3c7;color:#854d0e;border-color:#fbbf24}
+.suffix-grid button[data-stock-level="high"],.lottery-stock-legend [data-stock-level="high"] {background:#dcfce7;color:#166534;border-color:#4ade80}
+.suffix-grid button[aria-pressed="true"] {outline:3px solid #174b3e;outline-offset:1px}
+.lottery-approval-panel {grid-column:1/-1}
+.lottery-approval-card {display:grid;gap:8px;padding:16px;border:1px solid #c5d5d1;border-radius:12px;margin-top:12px}
+.lottery-approval-card p {margin:0}
+.lottery-approval-actions {display:flex;align-items:end;flex-wrap:wrap;gap:10px}
 .book-intake {grid-template-columns:repeat(auto-fit,minmax(140px,1fr));align-items:end;margin-bottom:18px}
 .book-intake h3 {grid-column:1/-1}
 .book-intake input {display:block;width:100%}
@@ -202,8 +214,26 @@ dialog.shop-wizard {width:min(760px,calc(100% - 1rem));max-height:92dvh;overflow
 .counter-keys button:active {background:#d1e8df}
 .cash-dial output {display:block;text-align:right;font-size:1.8rem;font-weight:700;margin:8px 0 16px}
 .transfer-page .operation-form-grid input {font-size:1.35rem;min-height:56px}
-.gas-sales-page.gas-step-selection {grid-template-columns:minmax(0,1fr);grid-template-areas:"header" "tanks" "recent" "follow"}
-.gas-sales-page.gas-step-delivery {grid-template-columns:minmax(0,1.2fr) minmax(0,1fr);grid-template-areas:"header header" "details status" "recent recent" "follow follow"}
+.gas-sales-page.gas-step-selection {grid-template-columns:minmax(0,1fr);grid-template-areas:"header" "voice" "tanks" "recent" "follow"}
+.gas-sales-page.gas-step-delivery {grid-template-columns:minmax(0,1.2fr) minmax(0,1fr);grid-template-areas:"header header" "voice voice" "details status" "recent recent" "follow follow"}
+.gas-voice-panel {grid-area:voice;min-width:0;border:2px solid var(--color-primary);display:grid;gap:14px}
+.gas-voice-heading {display:flex;align-items:center;justify-content:space-between;gap:18px;flex-wrap:wrap}
+.gas-voice-heading h3 {margin:0;font-size:1.25rem;color:var(--color-primary-darker)}
+.gas-voice-heading h3 span {display:inline-block;margin-inline-start:8px;padding:3px 9px;border-radius:6px;background:var(--color-primary-soft);font-size:.875rem;font-weight:500}
+.gas-voice-heading p {margin:8px 0 4px;font-size:1.125rem}
+.gas-voice-heading small,.gas-voice-privacy {color:var(--color-muted);font-size:.875rem}
+.gas-voice-actions {display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.gas-voice-actions button,.gas-voice-footer button {min-height:56px;font-size:1rem}
+.gas-voice-record {display:flex;align-items:center;justify-content:center;gap:10px;padding:12px 22px;border:2px solid var(--color-primary);border-radius:12px;background:var(--color-primary);color:white;font-weight:650;min-width:190px}
+.gas-voice-record .material-symbols-outlined {font-size:30px}
+.gas-voice-record.recording {background:var(--color-danger);border-color:var(--color-danger)}
+.gas-voice-record:disabled {opacity:.6}
+.gas-voice-panel textarea {width:100%;min-height:84px;font-size:1.1rem;resize:vertical}
+.gas-voice-footer {display:flex;align-items:center;justify-content:space-between;gap:16px;flex-wrap:wrap}
+.gas-voice-footer button {flex-shrink:0}
+.gas-voice-feedback {margin:0;flex:1 1 280px;font-size:1rem;line-height:1.7;overflow-wrap:anywhere}
+.gas-voice-feedback.success {color:var(--color-primary-dark)}
+.gas-voice-hint {margin:0;padding:10px 12px;border-radius:8px;background:var(--color-surface-soft);font-size:.95rem}
 .gas-brands {grid-template-columns:repeat(2,minmax(0,1fr))}
 .gas-brands button {display:flex;align-items:center;justify-content:center;gap:14px;min-height:96px;font-size:1.45rem}
 .gas-brands img {width:80px;height:58px;object-fit:contain;background:white;border-radius:8px;padding:4px}
@@ -226,7 +256,8 @@ dialog.shop-wizard {width:min(760px,calc(100% - 1rem));max-height:92dvh;overflow
   .topup-page {grid-template-columns:minmax(0,1fr)}
 }
 @media(max-width:650px) {
-  .gas-sales-page.gas-step-delivery {grid-template-columns:minmax(0,1fr);grid-template-areas:"header" "details" "status" "recent" "follow"}
+  .gas-sales-page.gas-step-delivery {grid-template-columns:minmax(0,1fr);grid-template-areas:"header" "voice" "details" "status" "recent" "follow"}
+  .gas-voice-actions,.gas-voice-actions button,.gas-voice-footer button {width:100%}
   .lottery-dial {grid-template-columns:minmax(0,1fr)}
   .gas-brands button,.topup-provider-grid button {flex-direction:column;gap:4px}
 }

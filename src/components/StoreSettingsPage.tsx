@@ -10,7 +10,10 @@ const fields = [
   ['topupAmount', 'ยอดเติมเงินมือถือเริ่มต้น'],
 ] as const;
 
-export default function StoreSettingsPage({ api, onSave }: { api: string; onSave: (settings: StoreSettings) => void }) {
+export default function StoreSettingsPage({ api, onSave, onChangePassword, onManageUsers }: {
+  api: string; onSave: (settings: StoreSettings) => void;
+  onChangePassword: () => void; onManageUsers: () => void;
+}) {
   const path = `${api}/api/store-settings`;
   const [revision, setRevision] = useState(0);
   const { data, error, loading } = useOperationData<StoreSettings>(path, revision);
@@ -46,6 +49,16 @@ export default function StoreSettingsPage({ api, onSave }: { api: string; onSave
   }
 
   return <div className="operation-page">
+    <section className="panel operation-panel">
+      <div className="operation-heading">
+        <span className="material-symbols-outlined" aria-hidden="true">manage_accounts</span>
+        <div><h2>บัญชีและรหัสผ่าน</h2><p>เปลี่ยนรหัสของตัวเอง หรือตั้งรหัสใหม่ให้บัญชีที่ลืมรหัสด้วยสิทธิ์เจ้าของร้าน</p></div>
+      </div>
+      <div className="operation-actions">
+        <button type="button" className="secondary-action" onClick={onChangePassword}>เปลี่ยนรหัสผ่านของฉัน</button>
+        <button type="button" className="primary-action" onClick={onManageUsers}>จัดการบัญชีและรหัสผ่าน</button>
+      </div>
+    </section>
     <form className="panel operation-panel" onSubmit={save}>
       <div className="operation-heading">
         <span className="material-symbols-outlined" aria-hidden="true">tune</span>

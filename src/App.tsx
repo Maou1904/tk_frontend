@@ -14,9 +14,12 @@ import TaxDashboard from './components/TaxDashboard';
 import StockDocuments from './components/StockDocuments';
 import WarehouseStock from './components/WarehouseStock';
 import StoreSettingsPage from './components/StoreSettingsPage';
+import GasVoiceInput from './components/GasVoiceInput';
+import { gasSizeFromName, parseGasVoice, resolveVoiceGasItem } from './gasVoice';
 import { baht, errorText } from './storeOperations';
 import type { StoreSettings, TransferTotals, Transfer } from './storeOperations';
 import { summarizeTransfers, analyticsBucket } from './analytics';
+import { lotteryStockLevel, LOTTERY_PENDING } from './lotteryStock';
 import './App.css';
 import './operations.css';
 
@@ -62,6 +65,11 @@ interface SaleRecord {
   staffName: string;
   paymentMethod: PaymentMethod;
   status: string;
+  submittedBy?: number;
+  submittedByName?: string;
+  reportedCashReceived?: number;
+  confirmedByName?: string;
+  confirmedAt?: string;
   items: SaleRecordItem[];
   subtotal: number;
   discount: number;
@@ -381,6 +389,7 @@ interface LotteryTicket {
   series: string;
   price: number;
   remaining: number;
+  stockReference?: number;
   active?: boolean;
 }
 
@@ -800,6 +809,7 @@ function normalizeLotteryTicket(ticket: LotteryTicket): LotteryTicket {
     series: ticket.series || 'Manual',
     price: Number(ticket.price),
     remaining: Number(ticket.remaining),
+    stockReference: Number(ticket.stockReference ?? ticket.remaining),
     active: ticket.active ?? true,
   };
 }
@@ -1228,6 +1238,12 @@ export default function App() {
   const [loginForm, setLoginForm] = useState({ username: 'owner', password: '' });
   const [loginNotice, setLoginNotice] = useState('เข้าสู่ระบบก่อนใช้งาน');
   const [passwordPanelOpen, setPasswordPanelOpen] = useState(false);
+  const [passwordResetTarget, setPasswordResetTarget] = useState<AuthUser>();
+  const [passwordBusy, setPasswordBusy] = useState(false);
+  const [passwordError, setPasswordError] = useState('');
+  const [passwordSaved, setPasswordSaved] = useState(false);
+  const [passwordVisible, setPasswordVisible] = useState(false);
+  const [staffTab, setStaffTab] = useState<'staff' | 'accounts'>('staff');
   const [passwordForm, setPasswordForm] = useState({ currentPassword: '', newPassword: '', confirmPassword: '' });
   const [passwordNotice, setPasswordNotice] = useState('เปลี่ยนรหัสผ่านของบัญชีที่กำลังใช้งาน');
   const [users, setUsers] = useState<AuthUser[]>([]);
@@ -1243,7 +1259,10 @@ export default function App() {
   const [checkoutStep, setCheckoutStep] = useState(0);
   const [amountBuffer, setAmountBuffer] = useState('');
   const [gasStep, setGasStep] = useState<'selection' | 'delivery'>('selection');
-  const [lotteryTab, setLotteryTab] = useState<'keypad' | 'map'>('keypad');
+  const [lotteryTab, setLotteryTab] = useState<'keypad' | 'map'>('map');
+  const [lotteryCheckoutBusy, setLotteryCheckoutBusy] = useState(false);
+  const [lotteryApprovalBusy, setLotteryApprovalBusy] = useState('');
+  const [lotteryApprovalCash, setLotteryApprovalCash] = useState<Record<string, string>>({});
   const [gasBrand, setGasBrand] = useState<GasBrand | ''>('');
   const [posCheckoutOpen, setPosCheckoutOpen] = useState(false);
   const [posAmountField, setPosAmountField] = useState<PosAmountField | null>(null);
@@ -1304,6 +1323,8 @@ export default function App() {
   const [gasItems, setGasItems] = useState<GasItem[]>([]);
   const [gasQuantities, setGasQuantities] = useState<Record<string, number>>({});
   const [gasCustomer, setGasCustomer] = useState({ name: '', phone: '', address: '' });
+  const [gasVoiceBusy, setGasVoiceBusy] = useState(false);
+  const [gasVoiceSession, setGasVoiceSession] = useState(0);
   const [gasDriverId, setGasDriverId] = useState('');
   const [gasJobs, setGasJobs] = useState<GasJob[]>([]);
   const [pendingGasReturns, setPendingGasReturns] = useState<PendingGasReturn[]>([]);
@@ -1479,8 +1500,20 @@ export default function App() {
             setPreviousClosingSummary(null);
           }
         })
-        .catch(() => {
-          // The client-side daily session id is deterministic, so POS can still work once the backend is available.
+        .catch((error) => {
+          if (!cancelled && axios.isAxiosError(error) && error.response?.status === 401) {
+            setAuthSession(null);
+            setUsers([]);
+            setPosCart([]);
+            setLotteryCart([]);
+            setSalesHistory([]);
+            setPasswordPanelOpen(false);
+            setPasswordResetTarget(undefined);
+            setPasswordForm({ currentPassword: '', newPassword: '', confirmPassword: '' });
+            setLoginForm({ username: authSession.user.username, password: '' });
+            setLoginNotice('เซสชันหมดอายุหรือรหัสผ่านถูกเปลี่ยน กรุณาเข้าสู่ระบบอีกครั้ง');
+            setCurrentView('POS');
+          }
         });
     };
 
@@ -1977,7 +2010,7 @@ export default function App() {
     ? gasCorrectionItemId
     : gasItems[0]?.id ?? '';
   const analyticsRevenueSales = useMemo(
-    () => analyticsSales.filter((sale) => !isCancelledStatus(sale.status)),
+    () => analyticsSales.filter((sale) => !isCancelledStatus(sale.status) && sale.status !== LOTTERY_PENDING),
     [analyticsSales],
   );
   const transferSummary = useMemo(() => summarizeTransfers(analyticsTransfers), [analyticsTransfers]);
@@ -1993,8 +2026,8 @@ export default function App() {
   const analyticsSuccessfulCount = analyticsRevenueSales.filter((sale) =>
     isCompletedStatus(sale.status),
   ).length;
-  const analyticsCancelledCount = analyticsSales.length - analyticsRevenueSales.length;
-  const analyticsPendingCount = analyticsRevenueSales.length - analyticsSuccessfulCount;
+  const analyticsCancelledCount = analyticsSales.filter((sale) => isCancelledStatus(sale.status)).length;
+  const analyticsPendingCount = analyticsSales.filter((sale) => !isCancelledStatus(sale.status) && !isCompletedStatus(sale.status)).length;
   const analyticsChannelTotals = analyticsRevenueSales.reduce<Record<SaleChannel, { total: number; count: number }>>(
     (totals, sale) => {
       const current = totals[sale.channel];
@@ -2013,6 +2046,7 @@ export default function App() {
       TOPUP: { total: 0, count: 0 },
     },
   );
+  const pendingLotterySales = salesHistory.filter((sale) => sale.channel === 'LOTTERY' && sale.status === LOTTERY_PENDING);
   const possibleLotteryRevenue = lotteryTickets.reduce((sum, ticket) => sum + ticket.remaining * ticket.price, 0);
   const analyticsPaymentTotals = useMemo(() => {
     const totals = new Map<string, { total: number; count: number }>();
@@ -2153,40 +2187,60 @@ export default function App() {
     setCurrentView('POS');
   }
 
+  function openPasswordPanel(target?: AuthUser) {
+    setPasswordResetTarget(target);
+    setPasswordForm({ currentPassword: '', newPassword: '', confirmPassword: '' });
+    setPasswordNotice(target ? `ตั้งรหัสใหม่ให้ ${target.displayName} (${target.username}) โดยไม่ต้องใช้รหัสเดิม` : 'เปลี่ยนรหัสผ่านของบัญชีที่กำลังใช้งาน');
+    setPasswordError('');
+    setPasswordSaved(false);
+    setPasswordVisible(false);
+    setPasswordPanelOpen(true);
+  }
+
+  function closePasswordPanel() {
+    if (passwordBusy) return;
+    setPasswordPanelOpen(false);
+    setPasswordResetTarget(undefined);
+    setPasswordForm({ currentPassword: '', newPassword: '', confirmPassword: '' });
+    setPasswordError('');
+    setPasswordSaved(false);
+    setPasswordVisible(false);
+  }
+
+  function validateNewPassword() {
+    if (passwordForm.newPassword.length < 6 || passwordForm.newPassword.length > 256) {
+      setPasswordError('รหัสผ่านใหม่ต้องมี 6–256 ตัวอักษร');
+      return false;
+    }
+    if (passwordForm.newPassword !== passwordForm.confirmPassword) {
+      setPasswordError('รหัสผ่านใหม่กับยืนยันรหัสไม่ตรงกัน');
+      return false;
+    }
+    return true;
+  }
+
   async function changeCurrentPassword() {
-    const currentPassword = passwordForm.currentPassword;
-    const newPassword = passwordForm.newPassword;
-    const confirmPassword = passwordForm.confirmPassword;
-
-    if (!currentPassword || newPassword.length < 6) {
-      setPasswordNotice('กรอกรหัสเดิมและรหัสใหม่อย่างน้อย 6 ตัว');
+    if (passwordBusy) return;
+    setPasswordError('');
+    setPasswordSaved(false);
+    if (!passwordForm.currentPassword) {
+      setPasswordError('กรอกรหัสผ่านเดิม');
       return;
     }
-    if (newPassword !== confirmPassword) {
-      setPasswordNotice('รหัสผ่านใหม่กับยืนยันรหัสไม่ตรงกัน');
-      return;
-    }
-
+    if (!validateNewPassword()) return;
+    setPasswordBusy(true);
     try {
       const response = await axios.patch<ChangePasswordResponse>(`${API_BASE_URL}/api/auth/password`, {
-        currentPassword,
-        newPassword,
+        currentPassword: passwordForm.currentPassword, newPassword: passwordForm.newPassword,
       });
-      if (authSession) {
-        setAuthSession({
-          ...authSession,
-          user: normalizeAuthUser(response.data.user),
-        });
-      }
+      if (authSession) setAuthSession({ ...authSession, user: normalizeAuthUser(response.data.user) });
       setPasswordForm({ currentPassword: '', newPassword: '', confirmPassword: '' });
-      setPasswordNotice('เปลี่ยนรหัสผ่านแล้ว');
+      setPasswordVisible(false);
+      setPasswordNotice('เปลี่ยนรหัสผ่านแล้ว อุปกรณ์อื่นต้องเข้าสู่ระบบด้วยรหัสใหม่');
+      setPasswordSaved(true);
     } catch (error) {
-      if (axios.isAxiosError(error) && error.response?.status === 401) {
-        setPasswordNotice('รหัสเดิมไม่ถูกต้อง');
-        return;
-      }
-      setPasswordNotice('เปลี่ยนรหัสผ่านไม่สำเร็จ');
-    }
+      setPasswordError(axios.isAxiosError(error) && error.response?.status === 401 ? 'รหัสเดิมไม่ถูกต้อง' : 'เปลี่ยนรหัสผ่านไม่สำเร็จ');
+    } finally { setPasswordBusy(false); }
   }
 
   async function refreshUsers() {
@@ -2980,6 +3034,50 @@ export default function App() {
     }
   }
 
+  function applyGasVoice(text: string) {
+    const draft = parseGasVoice(text);
+    if (draft.errors.length) return { ok: false, message: `${draft.errors.join(' · ')} · ฟอร์มยังไม่เปลี่ยน` };
+
+    const notes = [...draft.notes];
+    const summary: string[] = [];
+    const wantsProduct = draft.brand !== undefined || draft.sizeKg !== undefined || draft.quantity !== undefined;
+    let selectedItem: GasItem | undefined;
+    const quantity = draft.quantity ?? 1;
+    if (wantsProduct) {
+      const brand = draft.brand ?? (gasBrand || undefined);
+      const sizeKg = draft.sizeKg ?? (gasOrderItems.length === 1 ? gasSizeFromName(gasOrderItems[0].name) : undefined);
+      if (!brand || !sizeKg) return { ok: false, message: 'ระบุยี่ห้อและขนาดถังให้ครบ เช่น ปตท. ถังใหญ่ หรือเลือกถังในฟอร์มก่อน · ฟอร์มยังไม่เปลี่ยน' };
+      const result = resolveVoiceGasItem(gasItems, brand, sizeKg, quantity);
+      if (!result.item) return { ok: false, message: `${result.error} · ฟอร์มยังไม่เปลี่ยน` };
+      selectedItem = result.item;
+      summary.push(`${brand} ${sizeKg} กก. × ${quantity} ถัง`);
+      if (draft.quantity === undefined) notes.push('ไม่ได้บอกจำนวน ใช้ 1 ถัง');
+    }
+
+    const changesCustomer = (draft.customerName !== undefined && draft.customerName !== gasCustomer.name)
+      || (draft.address !== undefined && draft.address !== gasCustomer.address);
+    // A different destination must not inherit another customer's name or phone.
+    const customer = {
+      name: draft.customerName ?? (changesCustomer ? '' : gasCustomer.name),
+      address: draft.address ?? (changesCustomer ? '' : gasCustomer.address),
+      phone: draft.phone ?? (changesCustomer ? '' : gasCustomer.phone),
+    };
+    if (selectedItem) {
+      setGasBrand(selectedItem.brand);
+      setGasQuantities({ [selectedItem.id]: quantity });
+      setGasReturnedTankQuantity(0);
+    }
+    setGasCustomer(customer);
+    if (draft.customerName) summary.push(draft.customerName);
+    if (draft.address) summary.push(`ส่งที่ ${draft.address}`);
+    if (draft.phone) summary.push(`โทร ${draft.phone}`);
+    if (!customer.name) notes.push('ยังขาดชื่อลูกค้า');
+    if (!customer.address) notes.push('ยังขาดจุดส่ง');
+    if (selectedItem || gasSelectedCount > 0) setGasStep('delivery');
+    else notes.push('เลือกยี่ห้อและขนาดถังต่อในฟอร์ม');
+    return { ok: true, message: `กรอกให้แล้ว: ${summary.join(' · ')}${notes.length ? ` · ${notes.join(' · ')}` : ''} · ตรวจข้อมูลและคนส่งก่อนกดทำรายการ` };
+  }
+
   function selectGasBrand(brand: GasBrand) {
     if (brand === gasBrand) return;
     setGasBrand(brand);
@@ -3031,6 +3129,7 @@ export default function App() {
   }
 
   async function createGasJob() {
+    if (gasVoiceBusy) return;
     if (!requireShopOpen(setGasNotice)) {
       return;
     }
@@ -3077,6 +3176,7 @@ export default function App() {
       setGasBrand('');
       setGasQuantities({});
       setGasCustomer({ name: '', phone: '', address: '' });
+      setGasVoiceSession((previous) => previous + 1);
       setGasDeliveryFee(null);
       setGasReturnedTankQuantity(0);
       setGasPaid(isOwner);
@@ -3310,6 +3410,7 @@ export default function App() {
   }
 
   async function completeLotterySale() {
+    if (lotteryCheckoutBusy) return;
     if (!requireShopOpen(setLotteryNotice)) {
       return;
     }
@@ -3358,6 +3459,7 @@ export default function App() {
       note: 'ขายหวยหน้าร้าน',
     };
 
+    setLotteryCheckoutBusy(true);
     try {
       const response = await axios.post<{ sale: ApiSaleRecord; cart: CartSessionResponse }>(
         `${API_BASE_URL}/api/app-sessions/${encodeURIComponent(scanSessionId)}/lottery/checkout`,
@@ -3374,11 +3476,26 @@ export default function App() {
       setSelectedSaleId(completedSale.id);
       setLotteryCart(response.data.cart.items.map(normalizeCartItem));
       await refreshLotteryTickets();
-      setLotteryNotice(`ขายหวยสำเร็จ ${formatMoney(lotterySubtotal)}`);
+      setLotteryNotice(completedSale.status === LOTTERY_PENDING ? 'ส่งรายการให้เจ้าของร้านตรวจและยืนยันแล้ว สต็อกหวยถูกกันไว้สำหรับรายการนี้' : `ขายหวยสำเร็จ ${formatMoney(lotterySubtotal)}`);
       setLotteryReceived(0);
     } catch {
-      setLotteryNotice('บันทึกขายหวยไม่สำเร็จ เพราะเชื่อมต่อ tingkum_db ไม่ได้');
+      setLotteryNotice('บันทึกขายหวยไม่สำเร็จ กรุณาตรวจรายการและลองอีกครั้ง');
+    } finally { setLotteryCheckoutBusy(false); }
+  }
+
+  async function confirmLotteryPayment(sale: SaleRecord) {
+    if (!isOwner || lotteryApprovalBusy) return;
+    const cashReceived = Number(lotteryApprovalCash[sale.id] ?? sale.reportedCashReceived ?? sale.total);
+    if (!Number.isFinite(cashReceived) || cashReceived < sale.total) {
+      setLotteryNotice('เงินที่ตรวจรับจริงต้องไม่น้อยกว่ายอดรายการ'); return;
     }
+    setLotteryApprovalBusy(sale.id);
+    try {
+      const { data } = await axios.post<ApiSaleRecord>(`${API_BASE_URL}/api/app-sessions/${encodeURIComponent(scanSessionId)}/lottery/${encodeURIComponent(sale.id)}/confirm`, { cashReceived });
+      setSalesHistory((previous) => previous.map((row) => row.id === data.id ? normalizeSaleRecord(data) : row));
+      setLotteryNotice(`ยืนยันรับเงินรายการ ${sale.id} แล้ว`);
+    } catch (error) { setLotteryNotice(errorText(error)); }
+    finally { setLotteryApprovalBusy(''); }
   }
 
   function appendTopupPhoneDigit(digit: string) {
@@ -3874,29 +3991,27 @@ export default function App() {
     }
   }
 
-  async function resetUserPassword(user: AuthUser) {
-    if (!isOwner) {
-      return;
-    }
-
-    const password = window.prompt(`ตั้งรหัสผ่านใหม่ให้ ${user.username}`)?.trim();
-    if (!password || password.length < 6) {
-      return;
-    }
-
+  async function resetUserPassword() {
+    if (!isOwner || !passwordResetTarget || passwordBusy) return;
+    setPasswordError('');
+    setPasswordSaved(false);
+    if (!validateNewPassword()) return;
+    setPasswordBusy(true);
     try {
-      await axios.patch<AuthUser>(`${API_BASE_URL}/api/users/${user.id}`, {
-        password,
-        reason: 'reset user password',
+      const { data } = await axios.patch<AuthUser>(`${API_BASE_URL}/api/users/${passwordResetTarget.id}`, {
+        password: passwordForm.newPassword, reason: 'owner reset password',
       });
-      await refreshUsers();
-      setApiStatus(`เปลี่ยนรหัสผ่าน ${user.username} แล้ว`);
-    } catch {
-      setApiStatus('เปลี่ยนรหัสผ่าน user ไม่สำเร็จ');
-    }
+      setUsers((previous) => previous.map((user) => user.id === data.id ? normalizeAuthUser(data) : user));
+      setPasswordForm({ currentPassword: '', newPassword: '', confirmPassword: '' });
+      setPasswordVisible(false);
+      setPasswordNotice(`ตั้งรหัสผ่านใหม่ให้ ${passwordResetTarget.username} แล้ว อุปกรณ์อื่นของบัญชีนี้ต้องเข้าสู่ระบบใหม่`);
+      setPasswordSaved(true);
+    } catch { setPasswordError('ตั้งรหัสผ่านไม่สำเร็จ กรุณาลองอีกครั้ง'); }
+    finally { setPasswordBusy(false); }
   }
 
   async function downloadSaleRecordPdf(sale: SaleRecord) {
+    if (sale.status === LOTTERY_PENDING) { setHistoryNotice('รอเจ้าของร้านยืนยันก่อนออกใบเสร็จ'); return; }
     setIsPrintingReceipt(true);
     setHistoryNotice(`กำลังสร้าง PDF ${sale.id}`);
 
@@ -3984,7 +4099,7 @@ export default function App() {
         sale.total,
         sale.cashReceived,
         sale.change,
-        sale.note ?? '',
+        `${sale.note ?? ''}${sale.submittedByName ? ' | ผู้ทำ: ' + sale.submittedByName : ''}${sale.confirmedByName ? ' | ผู้ยืนยัน: ' + sale.confirmedByName + ' ' + (sale.confirmedAt ?? '') : ''}`,
       ]),
     ];
     const itemRows: Array<Array<string | number>> = [
@@ -4370,6 +4485,8 @@ export default function App() {
           </div>
         </section>
 
+        <GasVoiceInput key={gasVoiceSession} onApply={applyGasVoice} onBusyChange={setGasVoiceBusy} />
+
         {gasStep === 'selection' && <section className="panel gas-tank-panel">
           <PanelTitle icon="propane_tank" title="เลือกยี่ห้อแก๊ส" detail={gasNotice} />
           <div className="touch-options gas-brands">{GAS_BRANDS.map(brand => <button key={brand} aria-pressed={gasBrand === brand} onClick={() => selectGasBrand(brand)}><img src={brand === 'สยาม' ? '/brands/siam.png' : '/brands/ptt.svg'} alt=""/>{brand}</button>)}</div>
@@ -4544,7 +4661,7 @@ export default function App() {
             </label>
             <div className="gas-net-total"><span>ยอดรวมสุทธิ</span><strong>{formatMoney(gasTotal)}</strong></div>
           </div>
-          <button className="primary-action" disabled={!gasBrand || !gasOrderItems.length || !gasCustomer.name.trim() || !gasCustomer.address.trim() || !gasDriverId} onClick={createGasJob}>ทำรายการแก๊ส</button>
+          <button className="primary-action" disabled={gasVoiceBusy || !gasBrand || !gasOrderItems.length || !gasCustomer.name.trim() || !gasCustomer.address.trim() || !gasDriverId} onClick={createGasJob}>ทำรายการแก๊ส</button>
         </aside>}
 
         <section className="panel gas-followup-panel">
@@ -4609,13 +4726,25 @@ export default function App() {
           <PanelTitle icon="confirmation_number" title="ขายหวย" detail={lotteryNotice} />
           <div className="touch-options lottery-tabs">
             <button aria-pressed={lotteryTab === 'keypad'} onClick={() => setLotteryTab('keypad')}>แป้นเลข</button>
-            <button aria-pressed={lotteryTab === 'map'} onClick={() => setLotteryTab('map')}>ผังรวม 00–99</button>
+            <button aria-pressed={lotteryTab === 'map'} onClick={() => setLotteryTab('map')}>ผังสี 00–99</button>
           </div>
-          {lotteryTab === 'map' ? <div className="suffix-grid">{Array.from({length:100},(_,i) => String(i).padStart(2,'0')).map(number => {
-            const ticket = lotteryTickets.find(row => row.number === number);
-            const available = ticket ? lotteryAvailable(ticket) : 0;
-            return <button key={number} onClick={() => {setLotteryInput(number);setLotteryTab('keypad');}}>{number}<small>{available} ใบ</small></button>;
-          })}</div> : <div className="lottery-dial">
+          {lotteryTab === 'map' ? <div>
+            <div className="lottery-stock-legend" aria-label="คำอธิบายสีสต็อกหวย">
+              <span data-stock-level="empty">หมด · 0%</span><span data-stock-level="low">น้อย · 1–33%</span>
+              <span data-stock-level="medium">กลาง · 34–66%</span><span data-stock-level="high">มาก/เต็ม · 67–100%</span>
+            </div>
+            <p className="lottery-stock-hint">สีเทียบยอดเต็มของแต่ละเลข · จำนวนพร้อมขายหักรายการในตะกร้าแล้ว</p>
+            <div className="suffix-grid">{Array.from({ length: 100 }, (_, i) => String(i).padStart(2, '0')).map(number => {
+              const ticket = lotteryTickets.find(row => row.number === number);
+              const available = Math.max(0, ticket ? lotteryAvailable(ticket) : 0);
+              const heat = lotteryStockLevel(available, ticket?.stockReference ?? ticket?.remaining ?? 0);
+              return <button key={number} data-stock-level={heat.level} aria-pressed={lotteryInput === number}
+                aria-label={`เลข ${number} เหลือ ${available} ใบ ${heat.label}`} title={`${available}/${ticket?.stockReference ?? 0} ใบ · ${heat.percent}%`}
+                disabled={available === 0} onClick={() => { setLotteryInput(number); setLotteryTab('keypad'); }}>
+                {number}<small>{available} ใบ</small>
+              </button>;
+            })}</div>
+          </div> : <div className="lottery-dial">
             <div className="lottery-selection" aria-live="polite">
               <label>เลขสลาก<input inputMode="numeric" aria-label="เลขสลาก" value={lotteryInput} maxLength={6} placeholder="– –" onChange={e => setLotteryInput(e.target.value.replace(/\D/g,''))}/></label>
               {lotteryInput.length >= 2 && <><strong>{matchingTicket ? 'เหลือให้เลือก ' + lotteryAvailable(matchingTicket) + ' ใบ' : 'ไม่พบเลขนี้ในสต็อก'}</strong>
@@ -4669,10 +4798,26 @@ export default function App() {
             <span>เงินทอน</span>
             <strong>{formatMoney(lotteryChange)}</strong>
           </div>
-          <button className="primary-action" type="button" onClick={completeLotterySale}>
-            <Icon name="paid" /> ทำรายการหวย
+          <button className="primary-action" type="button" disabled={lotteryCheckoutBusy || lotteryCart.length === 0} onClick={completeLotterySale}>
+            <Icon name="paid" /> {lotteryCheckoutBusy ? 'กำลังส่งรายการ…' : isOwner ? 'ยืนยันรายการและจ่ายแล้ว' : 'ส่งรายการให้เจ้าของร้านยืนยัน'}
           </button>
         </aside>
+        <section className="panel lottery-approval-panel">
+          <PanelTitle icon="fact_check" title={isOwner ? 'รายการหวยรอยืนยัน' : 'รายการหวยของฉันที่รอยืนยัน'} detail="กันสต็อกไว้แล้ว ยอดขายจะนับเมื่อเจ้าของร้านยืนยันรับเงิน" />
+          {pendingLotterySales.filter((sale) => isOwner || sale.submittedBy === currentUser?.id).length === 0 ? <EmptyState text="ไม่มีรายการรอยืนยัน" /> :
+            pendingLotterySales.filter((sale) => isOwner || sale.submittedBy === currentUser?.id).map((sale) => (
+              <article className="lottery-approval-card" key={sale.id}>
+                <strong>{sale.id}</strong><span>ผู้ทำรายการ: {sale.submittedByName || sale.staffName} · {formatReceiptDateTime(sale.createdAt)}</span>
+                <p>{sale.items.map((item) => `${item.barcode || item.name} × ${item.quantity}`).join(' · ')}</p>
+                <div>ยอดต้องเก็บ <b>{formatMoney(sale.total)}</b> · {sale.paymentMethod} · แจ้งรับเงิน {formatMoney(sale.reportedCashReceived ?? 0)}</div>
+                {isOwner && <div className="lottery-approval-actions">
+                  {sale.paymentMethod === 'เงินสด' && <label className="field"><span>เงินที่ตรวจรับจริง (บาท)</span><input type="number" min={sale.total} step="0.01" value={lotteryApprovalCash[sale.id] ?? String(sale.reportedCashReceived ?? sale.total)} onChange={(event) => setLotteryApprovalCash({ ...lotteryApprovalCash, [sale.id]: event.target.value })} /></label>}
+                  <button type="button" className="primary-action" disabled={Boolean(lotteryApprovalBusy)} onClick={() => void confirmLotteryPayment(sale)}>ยืนยันรายการ / จ่ายแล้ว</button>
+                  <button type="button" className="secondary-action" disabled={Boolean(lotteryApprovalBusy)} onClick={() => void cancelSaleRecord(sale)}>ยกเลิกรายการ</button>
+                </div>}
+              </article>
+            ))}
+        </section>
       </div>
     );
   }
@@ -5251,7 +5396,7 @@ export default function App() {
                         <small>{sale.items.reduce((sum, item) => sum + item.quantity, 0)} รายการ</small>
                       </td>
                       <td>{sale.customerName}</td>
-                      <td>{sale.staffName}</td>
+                      <td>{sale.staffName}{sale.confirmedByName && <small>ยืนยันโดย {sale.confirmedByName}</small>}</td>
                       <td>{sale.items.reduce((sum, item) => sum + item.quantity, 0)}</td>
                       <td>
                         <span className={`badge ${isCancelledStatus(sale.status) ? 'danger' : isCompletedStatus(sale.status) ? 'success' : 'warning'}`}>
@@ -5712,6 +5857,11 @@ export default function App() {
   function renderStaffPage() {
     return (
       <div className="staff-page">
+        <div className="touch-options staff-account-tabs" role="group" aria-label="จัดการพนักงานและบัญชี">
+          <button type="button" aria-pressed={staffTab === 'staff'} onClick={() => setStaffTab('staff')}>ข้อมูลพนักงาน</button>
+          {isOwner && <button type="button" aria-pressed={staffTab === 'accounts'} onClick={() => setStaffTab('accounts')}>บัญชีและรหัสผ่าน</button>}
+        </div>
+        {staffTab === 'staff' && <>
         <section className="panel">
           <PanelTitle icon="groups" title="พนักงานในร้าน" detail={`${activeStaff.length} คนกำลังใช้งาน`} />
           <div className="staff-grid">
@@ -5760,12 +5910,13 @@ export default function App() {
           </div>
         </aside>
 
-        <section className="panel wide-panel">
-          <PanelTitle icon="manage_accounts" title="User Login" detail={`${users.length} users`} />
+        </>}
+        {isOwner && staffTab === 'accounts' && <section className="panel wide-panel">
+          <PanelTitle icon="manage_accounts" title="บัญชีและรหัสผ่าน" detail="เจ้าของร้านตั้งรหัสใหม่ให้บัญชีที่ลืมรหัสได้ ไม่สามารถดูรหัสเดิม" />
           <div className="user-admin-grid">
             <div className="form-stack">
               <label className="field">
-                <span>Username</span>
+                <span>ชื่อผู้ใช้</span>
                 <input value={userForm.username} onChange={(event) => setUserForm({ ...userForm, username: event.target.value })} />
               </label>
               <label className="field">
@@ -5773,18 +5924,18 @@ export default function App() {
                 <input value={userForm.displayName} onChange={(event) => setUserForm({ ...userForm, displayName: event.target.value })} />
               </label>
               <label className="field">
-                <span>Password</span>
-                <input type="password" value={userForm.password} onChange={(event) => setUserForm({ ...userForm, password: event.target.value })} />
+                <span>รหัสผ่านเริ่มต้น (อย่างน้อย 6 ตัว)</span>
+                <input type="password" minLength={6} maxLength={256} autoComplete="new-password" value={userForm.password} onChange={(event) => setUserForm({ ...userForm, password: event.target.value })} />
               </label>
               <label className="field">
-                <span>Role</span>
+                <span>สิทธิ์</span>
                 <select value={userForm.role} onChange={(event) => setUserForm({ ...userForm, role: event.target.value as AppRole })}>
-                  <option value="user">user</option>
-                  <option value="owner">owner</option>
+                  <option value="user">พนักงาน (user)</option>
+                  <option value="owner">เจ้าของร้าน (owner)</option>
                 </select>
               </label>
               <button className="primary-action" type="button" onClick={() => void addUser()}>
-                <Icon name="person_add" /> เพิ่ม user
+                <Icon name="person_add" /> เพิ่มบัญชี
               </button>
             </div>
 
@@ -5792,9 +5943,9 @@ export default function App() {
               <table>
                 <thead>
                   <tr>
-                    <th>Username</th>
+                    <th>ชื่อผู้ใช้</th>
                     <th>ชื่อ</th>
-                    <th>Role</th>
+                    <th>สิทธิ์</th>
                     <th>สถานะ</th>
                     <th></th>
                   </tr>
@@ -5804,11 +5955,11 @@ export default function App() {
                     <tr key={user.id}>
                       <td><strong>{user.username}</strong></td>
                       <td>{user.displayName}</td>
-                      <td>{user.role}</td>
+                      <td>{user.role === 'owner' ? 'เจ้าของร้าน' : 'พนักงาน'}</td>
                       <td>{user.active ? 'ใช้งาน' : 'ปิด'}</td>
                       <td>
                         <div className="row-actions">
-                          <button className="link-button" type="button" onClick={() => resetUserPassword(user)}>ตั้งรหัส</button>
+                          <button className="link-button" type="button" onClick={() => openPasswordPanel(user)}>ตั้งรหัสผ่านใหม่</button>
                           <button className="link-button danger" type="button" disabled={user.id === currentUser?.id} onClick={() => toggleUserStatus(user)}>
                             {user.active ? 'ปิด' : 'เปิด'}
                           </button>
@@ -5820,7 +5971,7 @@ export default function App() {
               </table>
             </div>
           </div>
-        </section>
+        </section>}
       </div>
     );
   }
@@ -6177,66 +6328,42 @@ export default function App() {
   }
 
   function renderPasswordPanel() {
-    if (!passwordPanelOpen) {
-      return null;
-    }
-
+    if (!passwordPanelOpen || (passwordResetTarget && !isOwner)) return null;
+    const resetting = Boolean(passwordResetTarget);
+    const inputType = passwordVisible ? 'text' : 'password';
     return (
-      <div className="modal-backdrop" role="presentation">
-        <section className="password-panel" role="dialog" aria-modal="true" aria-labelledby="password-panel-title">
+      <dialog className="password-panel password-dialog" aria-labelledby="password-panel-title" ref={(dialog) => {
+        if (dialog && !dialog.open) dialog.showModal();
+      }} onCancel={(event) => { event.preventDefault(); closePasswordPanel(); }}>
           <div className="modal-head">
             <div>
-              <span className="badge neutral">Account</span>
-              <h2 id="password-panel-title">เปลี่ยนรหัสผ่าน</h2>
-              <p>{passwordNotice}</p>
+              <span className="badge neutral">{resetting ? 'เจ้าของร้าน' : 'บัญชีของฉัน'}</span>
+              <h2 id="password-panel-title">{resetting ? `ตั้งรหัสผ่านให้ ${passwordResetTarget?.username}` : 'เปลี่ยนรหัสผ่านของฉัน'}</h2>
+              <p role={passwordSaved ? 'status' : undefined}>{passwordNotice}</p>
             </div>
-            <button
-              className="icon-button"
-              type="button"
-              title="ปิด"
-              onClick={() => {
-                setPasswordPanelOpen(false);
-                setPasswordForm({ currentPassword: '', newPassword: '', confirmPassword: '' });
-                setPasswordNotice('เปลี่ยนรหัสผ่านของบัญชีที่กำลังใช้งาน');
-              }}
-            >
-              <Icon name="close" />
-            </button>
+            <button className="icon-button" type="button" title="ปิด" aria-label="ปิดหน้ารหัสผ่าน" disabled={passwordBusy} onClick={closePasswordPanel}><Icon name="close" /></button>
           </div>
-
-          <div className="form-stack">
-            <label className="field">
-              <span>รหัสผ่านเดิม</span>
-              <input
-                type="password"
-                value={passwordForm.currentPassword}
-                onChange={(event) => setPasswordForm({ ...passwordForm, currentPassword: event.target.value })}
-                autoFocus
-              />
-            </label>
-            <label className="field">
-              <span>รหัสผ่านใหม่</span>
-              <input
-                type="password"
-                value={passwordForm.newPassword}
-                onChange={(event) => setPasswordForm({ ...passwordForm, newPassword: event.target.value })}
-              />
-            </label>
-            <label className="field">
-              <span>ยืนยันรหัสผ่านใหม่</span>
-              <input
-                type="password"
-                value={passwordForm.confirmPassword}
-                onChange={(event) => setPasswordForm({ ...passwordForm, confirmPassword: event.target.value })}
-                onKeyDown={(event) => event.key === 'Enter' && void changeCurrentPassword()}
-              />
-            </label>
-            <button className="primary-action" type="button" onClick={() => void changeCurrentPassword()}>
-              <Icon name="lock_reset" /> บันทึกรหัสผ่าน
-            </button>
-          </div>
-        </section>
-      </div>
+          <form onSubmit={(event) => { event.preventDefault(); void (resetting ? resetUserPassword() : changeCurrentPassword()); }}>
+            <fieldset className="password-fields form-stack" disabled={passwordBusy}>
+              {!resetting && <label className="field">
+                <span>รหัสผ่านเดิม</span>
+                <input type={inputType} autoComplete="current-password" required value={passwordForm.currentPassword} onChange={(event) => setPasswordForm({ ...passwordForm, currentPassword: event.target.value })} autoFocus />
+              </label>}
+              <label className="field">
+                <span>รหัสผ่านใหม่</span>
+                <input type={inputType} autoComplete="new-password" required minLength={6} maxLength={256} value={passwordForm.newPassword} onChange={(event) => { setPasswordSaved(false); setPasswordForm({ ...passwordForm, newPassword: event.target.value }); }} autoFocus={resetting} />
+              </label>
+              <label className="field">
+                <span>ยืนยันรหัสผ่านใหม่</span>
+                <input type={inputType} autoComplete="new-password" required minLength={6} maxLength={256} value={passwordForm.confirmPassword} onChange={(event) => setPasswordForm({ ...passwordForm, confirmPassword: event.target.value })} />
+              </label>
+              <label className="password-visibility"><input type="checkbox" checked={passwordVisible} onChange={(event) => setPasswordVisible(event.target.checked)} /> แสดงรหัสผ่าน</label>
+              {passwordError && <p className="operation-feedback error" role="alert">{passwordError}</p>}
+              <button className="primary-action" type="submit"><Icon name="lock_reset" /> {passwordBusy ? 'กำลังบันทึก…' : 'บันทึกรหัสผ่านใหม่'}</button>
+              <button className="secondary-action" type="button" onClick={closePasswordPanel}>ปิด</button>
+            </fieldset>
+          </form>
+      </dialog>
     );
   }
 
@@ -6335,7 +6462,7 @@ export default function App() {
           }} /> : renderStockPage()}
         </div>;
       case 'SETTINGS':
-        return isOwner && <StoreSettingsPage api={API_BASE_URL} onSave={setStoreSettings} />;
+        return isOwner && <StoreSettingsPage api={API_BASE_URL} onSave={setStoreSettings} onChangePassword={() => openPasswordPanel()} onManageUsers={() => { setStaffTab('accounts'); setCurrentView('STAFF'); }} />;
       case 'STAFF':
         return renderStaffPage();
       case 'CLOSING':
@@ -6414,8 +6541,9 @@ export default function App() {
                   {isShopOpen ? 'ปิดร้าน' : shopStatus === 'CLOSED' ? 'เปิดรอบอีกครั้ง' : 'เปิดร้าน'}
                 </button>
               )}
+              {isOwner && pendingLotterySales.length > 0 && <button type="button" className="secondary-action" onClick={() => setCurrentView('LOTTERY')}><Icon name="pending_actions" /> หวยรอยืนยัน ({pendingLotterySales.length})</button>}
               <span className="topbar-date">{todayLabel}</span>
-              <button type="button" aria-label="เปลี่ยนรหัสผ่าน" title="เปลี่ยนรหัสผ่าน" onClick={() => setPasswordPanelOpen(true)}>
+              <button type="button" aria-label="เปลี่ยนรหัสผ่าน" title="เปลี่ยนรหัสผ่าน" onClick={() => openPasswordPanel()}>
                 <Icon name="lock_reset" />
               </button>
               <button type="button" aria-label="ออกจากระบบ" title="ออกจากระบบ" onClick={() => void logout()}><Icon name="logout" /></button>
