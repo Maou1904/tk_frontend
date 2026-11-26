@@ -149,6 +149,21 @@ test('the actual shop phrase separates a recipient and the place after thi', () 
   assert.equal(mixed.address, 'ดอนภูตา');
 });
 
+test('destination retains registration without confusing it with counts or phone numbers', () => {
+  for (const plate of ['ทะเบียน 123', 'ทะเบียนรถ กข 1234', 'ป้ายทะเบียน ๑กข ๑๒๓๔']) {
+    const draft = parseGasVoice(`ปตทถังใหญ่ 1 ถังที่ดอนปู่ตา${plate} เบอร์ 0812345678`);
+    assert.deepEqual(draft.errors, []);
+    assert.deepEqual(draft.items, [{ sizeKg: 15, quantity: 1 }]);
+    const expectedPlate = plate.replace(/[๐-๙]/g, digit => String(digit.charCodeAt(0) - '๐'.charCodeAt(0)));
+    assert.equal(draft.address, `ดอนปู่ตา ${expectedPlate}`);
+    assert.equal(draft.customerName, draft.address);
+    assert.equal(draft.phone, '0812345678');
+  }
+  const named = parseGasVoice('ส่งปตทถังใหญ่ 1 ถังให้คุณเจเจที่ดอนปู่ตาทะเบียน 123');
+  assert.equal(named.customerName, 'คุณเจเจ');
+  assert.equal(named.address, 'ดอนปู่ตา ทะเบียน 123');
+});
+
 test('all sizes resolve together; a later missing or insufficient size cannot return a partial order', () => {
   const items = [
     { id: 'ptt15', brand: 'ปตท', name: 'ถังแก๊ส 15 KG', stock: 3 },

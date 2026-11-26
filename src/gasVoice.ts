@@ -75,6 +75,9 @@ export function parseGasVoice(text: string): GasVoiceDraft {
   });
 
   const brands = new Set<VoiceGasBrand>();
+  // Keep registration digits out of cylinder counts and restore them to the destination.
+  const plate = rest.match(/(?:ป้าย)?ทะเบียน(?:รถ)?\s*[:：]?\s*(?:[0-9๐-๙]*[ก-ฮA-Za-z]+[ -]*[0-9๐-๙]+|[0-9๐-๙]+(?:-[0-9๐-๙]+)?)/u)?.[0];
+  if (plate) rest = rest.replace(plate, ' ');
   rest = rest.replace(/ป\s*\.?\s*ต\s*\.?\s*ท\s*\.?|ปอ\s*ตอ\s*ทอ|\bptt\b|\bor\b|สยาม(?:แก๊ส)?/gi, (word) => {
     brands.add(/สยาม/.test(word) ? 'สยาม' : 'ปตท');
     return ' ';
@@ -164,9 +167,11 @@ export function parseGasVoice(text: string): GasVoiceDraft {
     draft.customerName = cleanText(named[1]);
     rest = rest.replace(named[0], ' ');
   }
+  rest = rest.replace(/^\s*ที่(?!อยู่)\s*/u, 'ส่งที่ ');
   const address = rest.match(new RegExp(`${locationStart}.*`, 'u'));
   if (address) {
     draft.address = cleanText(address[0].replace(/^(?:ที่อยู่|จุดส่ง|จุดหมาย|ส่งที่)\s*[:：]?\s*/u, ''));
+    if (plate) draft.address = `${draft.address} ${plate}`;
     if (!draft.customerName) {
       const houseName = draft.address.match(/^(?:บ้าน|ร้าน)\s*((?:คุณ|ป้า|ลุง|น้า|พี่|นาย|นางสาว|นาง)\s*.+?)(?=\s|หลังวัด|ข้าง|ตรงข้าม|ใกล้|ซอย|หมู่|เลขที่|$)/u);
       if (houseName) draft.customerName = cleanText(houseName[1]);
