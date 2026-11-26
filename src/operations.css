@@ -253,6 +253,10 @@ dialog.shop-wizard {width:min(760px,calc(100% - 1rem));max-height:92dvh;overflow
 .gas-next {width:100%;min-height:56px;margin-top:14px}
 .gas-details-panel .field,.gas-status-panel {font-size:1.05rem}
 .gas-details-panel :is(input,select),.gas-status-panel button {min-height:50px}
+.gas-distance-toggle {display:flex;align-items:center;gap:10px;min-height:48px;padding:8px 12px;border:1px solid var(--color-border-soft);border-radius:8px;cursor:pointer}
+.gas-distance-toggle input {width:22px;min-height:22px;height:22px;flex-shrink:0;accent-color:var(--color-primary)}
+.gas-distance-toggle > span {display:flex;align-items:center;justify-content:space-between;gap:12px;flex:1;font-weight:600}
+.gas-distance-toggle small {color:var(--color-muted);font-size:.8rem;font-weight:400}
 .lottery-dial {display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:16px;margin-top:16px}
 .lottery-selection {display:grid;align-content:start;gap:12px}
 .lottery-selection label {display:grid;gap:6px}

@@ -18,8 +18,9 @@ const staff = [{ id: 'driver1', name: 'คนส่งทดสอบ', role: '�
 const writes = [];
 const pageErrors = [];
 const interpretations = [];
+const mockGasOrders = [];
 
-async function setup({ unsupported = false, prefixed = false, ai = false, aiBehavior = 'success' } = {}) {
+async function setup({ unsupported = false, prefixed = false, ai = false, aiBehavior = 'success', allowGasSubmit = false } = {}) {
   let aiAvailable = ai;
   const context = await browser.newContext({ viewport: { width: 1024, height: 768 } });
   await context.addInitScript(({ unsupported, prefixed }) => {
@@ -43,9 +44,21 @@ async function setup({ unsupported = false, prefixed = false, ai = false, aiBeha
     const request = route.request();
     if (request.method() === 'OPTIONS') return route.fulfill({ status: 204, headers: { 'access-control-allow-origin': '*', 'access-control-allow-headers': '*', 'access-control-allow-methods': '*' } });
     const path = new URL(request.url()).pathname;
-    if (request.method() !== 'GET' && path !== '/api/gas/voice/parse') writes.push({ method: request.method(), url: request.url() });
+    if (request.method() !== 'GET' && path !== '/api/gas/voice/parse' && !(allowGasSubmit && path.endsWith('/gas/jobs'))) writes.push({ method: request.method(), url: request.url() });
     let data = [];
-    if (path === '/api/gas/voice/status') data = { enabled: aiAvailable, provider: aiAvailable ? 'local' : 'rules' };
+    if (allowGasSubmit && path.endsWith('/gas/jobs') && request.method() === 'POST') {
+      const order = request.postDataJSON(); mockGasOrders.push(order);
+      const lines = order.items.map(line => ({ ...items.find(item => item.id === line.id), quantity: line.quantity }));
+      const subtotal = lines.reduce((sum, line) => sum + line.price * line.quantity, 0);
+      const distantDeliveryFee = order.distantDelivery ? lines.reduce((sum, line) => sum + line.quantity, 0) * 50 : 0;
+      const total = subtotal + order.deliveryFee + distantDeliveryFee;
+      const job = { ...order, id: 'GAS-MOCK-DISTANCE', items: lines, total, deliveryFee: order.deliveryFee + distantDeliveryFee,
+        distantDeliveryFee, status: 'กำลังดำเนินการ', createdAt: '12:00', returnedTankQuantity: 0, emptyTankReturned: false };
+      data = { state: { items, jobs: [job], pendingReturns: [] }, sale: { id: job.id, channel: 'GAS', createdAt: new Date().toISOString(),
+        customerName: order.customerName, staffName: order.driver, paymentMethod: 'เงินสด', status: 'สำเร็จ', items: lines,
+        subtotal, discount: 0, total, cashReceived: total, change: 0, note: 'ทดสอบส่งไกล' } };
+    }
+    else if (path === '/api/gas/voice/status') data = { enabled: aiAvailable, provider: aiAvailable ? 'local' : 'rules' };
     else if (path === '/api/gas/voice/parse') {
       interpretations.push(request.postDataJSON().text);
       if (aiBehavior === 'quota') return route.fulfill({ status: 429, contentType: 'application/json', headers: { 'access-control-allow-origin': '*' }, body: JSON.stringify({ code: 'VOICE_AI_LIMIT' }) });
@@ -236,6 +249,36 @@ try {
   assert.equal(await hiddenAI.page.locator('.gas-details-panel').count(), 0);
   assert.equal(await hiddenAI.page.getByRole('button', { name: 'แตะเพื่อพูด' }).isEnabled(), true);
   await hiddenAI.context.close();
+  const distant = await setup({ allowGasSubmit: true });
+  await applyText(distant.page, 'ปตท ถังใหญ่ 1 ถัง ที่ดอนปู่ตาทะเบียน 123');
+  const farCheckbox = distant.page.getByRole('checkbox', { name: /ส่งไกล/ });
+  assert.equal(await farCheckbox.isChecked(), false);
+  await farCheckbox.check();
+  assert.equal(await distant.page.locator('.gas-net-total strong').innerText(), '฿520.00');
+  await applyText(distant.page, 'ปตท ถังใหญ่ 2 ถัง ถังเล็ก 1 ถัง ส่งที่หลังวัด');
+  assert.equal(await distant.page.locator('.gas-net-total strong').innerText(), '฿1,270.00');
+  await distant.page.getByLabel('ค่าส่ง', { exact: true }).fill('35');
+  assert.equal(await distant.page.locator('.gas-net-total strong').innerText(), '฿1,285.00');
+  await farCheckbox.uncheck();
+  assert.equal(await distant.page.locator('.gas-net-total strong').innerText(), '฿1,135.00');
+  await farCheckbox.check();
+  const paidBox = await distant.page.locator('.gas-status-toggle').boundingBox();
+  const farBox = await distant.page.locator('.gas-distance-toggle').boundingBox();
+  assert.ok(farBox.y >= paidBox.y + paidBox.height);
+  await distant.page.getByRole('tab', { name: 'ติดตามรายการ', exact: true }).click();
+  await distant.page.getByRole('tab', { name: 'ขายแก๊ส', exact: true }).click();
+  assert.equal(await farCheckbox.isChecked(), true);
+  if (artifactDir) await distant.page.screenshot({ path: `${artifactDir}/gas-distance-1024.png`, fullPage: true });
+  await distant.page.getByRole('button', { name: 'ทำรายการแก๊ส', exact: true }).click();
+  await distant.page.getByRole('heading', { name: 'เลือกยี่ห้อแก๊ส', exact: true }).waitFor();
+  assert.equal(mockGasOrders.length, 1);
+  assert.equal(mockGasOrders[0].distantDelivery, true);
+  assert.equal(mockGasOrders[0].deliveryFee, 35);
+  assert.deepEqual(mockGasOrders[0].items.map(line => line.quantity), [2, 1]);
+  await applyText(distant.page, 'ปตท ถังใหญ่ 1 ถัง ส่งที่หลังวัด');
+  assert.equal(await farCheckbox.isChecked(), false);
+  assert.equal(await distant.page.locator('.gas-net-total strong').innerText(), '฿470.00');
+  await distant.context.close();
   const compact = await setup();
   for (const viewport of [{ width: 1024, height: 768 }, { width: 768, height: 1024 }, { width: 390, height: 844 }]) {
     await compact.page.setViewportSize(viewport);

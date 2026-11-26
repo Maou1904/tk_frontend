@@ -379,6 +379,8 @@ interface GasJob {
   items: Array<{ name: string; quantity: number; price: number }>;
   total: number;
   deliveryFee?: number;
+  distantDelivery?: boolean;
+  distantDeliveryFee?: number;
   returnedTankQuantity?: number;
   emptyTankReturned?: boolean;
   paid?: boolean;
@@ -1115,6 +1117,8 @@ function normalizeGasJob(job: GasJob): GasJob {
     ...job,
     total: Number(job.total),
     deliveryFee: Number(job.deliveryFee ?? 0),
+    distantDelivery: Boolean(job.distantDelivery),
+    distantDeliveryFee: Number(job.distantDeliveryFee ?? 0),
     returnedTankQuantity: Number(job.returnedTankQuantity ?? 0),
     emptyTankReturned: Boolean(job.emptyTankReturned),
     paid: Boolean(job.paid),
@@ -1336,6 +1340,7 @@ export default function App() {
   const [gasNotice, setGasNotice] = useState('กำลังโหลดข้อมูลแก๊สจาก tingkum_db');
   const [gasReturnedTankQuantity, setGasReturnedTankQuantity] = useState(0);
   const [gasPaid, setGasPaid] = useState(true);
+  const [gasDistantDelivery, setGasDistantDelivery] = useState(false);
   const [gasFeeOverride, setGasDeliveryFee] = useState<number | null>(null);
   const gasDeliveryFee = gasFeeOverride ?? (storeSettings?.gasDeliveryFee ?? 2000) / 100;
   const [gasPendingReturnQuantities, setGasPendingReturnQuantities] = useState<Record<string, number>>({});
@@ -1989,7 +1994,8 @@ export default function App() {
   );
   const gasSelectedCount = gasOrderItems.reduce((sum, item) => sum + item.quantity, 0);
   const gasSubtotal = gasOrderItems.reduce((sum, item) => sum + item.price * item.quantity, 0);
-  const gasTotal = gasSubtotal + Math.max(0, gasDeliveryFee);
+  const gasDistantDeliveryFee = gasDistantDelivery ? gasSelectedCount * 50 : 0;
+  const gasTotal = gasSubtotal + Math.max(0, gasDeliveryFee) + gasDistantDeliveryFee;
   const gasFullStockTotal = gasItems.reduce((sum, item) => sum + item.fullStock, 0);
   const gasEmptyStockTotal = gasItems.reduce((sum, item) => sum + item.emptyStock, 0);
   const gasStockTotal = gasItems.reduce((sum, item) => sum + item.totalStock, 0);
@@ -3181,6 +3187,7 @@ export default function App() {
           address: gasCustomer.address.trim(),
           driver: driver?.name ?? 'ยังไม่ระบุ',
           deliveryFee: Math.max(0, gasDeliveryFee),
+          distantDelivery: gasDistantDelivery,
           emptyTankReturnQuantity: gasReturnedCount,
           paid: gasPaid,
           items: gasOrderItems.map((item) => ({ id: item.id, quantity: item.quantity })),
@@ -3198,6 +3205,7 @@ export default function App() {
       setGasDeliveryFee(null);
       setGasReturnedTankQuantity(0);
       setGasPaid(isOwner);
+      setGasDistantDelivery(false);
       setGasNotice(`สร้างงาน ${saleRecord.id} แล้ว`);
     } catch (error) {
       if (axios.isAxiosError(error) && error.response?.status === 409) {
@@ -4645,6 +4653,10 @@ export default function App() {
               <input type="checkbox" checked={gasPaid} disabled={!isOwner} onChange={(event) => setGasPaid(event.target.checked)} />
               <i></i>
             </label>
+            <label className="gas-distance-toggle">
+              <input type="checkbox" checked={gasDistantDelivery} onChange={(event) => setGasDistantDelivery(event.target.checked)} />
+              <span>ส่งไกล <small>+50 บาท / ถัง</small></span>
+            </label>
           </div>
 
           <div className="gas-summary-lines">
@@ -4657,6 +4669,7 @@ export default function App() {
               <span>ค่าส่ง</span>
               <input type="number" min="0" value={gasDeliveryFee || ''} onChange={(event) => setGasDeliveryFee(Number(event.target.value))} />
             </label>
+            {gasDistantDelivery && <div><span>ส่งไกล {gasSelectedCount} ถัง × 50 บาท</span><strong>{formatMoney(gasDistantDeliveryFee)}</strong></div>}
             <div className="gas-net-total"><span>ยอดรวมสุทธิ</span><strong>{formatMoney(gasTotal)}</strong></div>
           </div>
           <button className="primary-action" disabled={gasVoiceBusy || !gasBrand || !gasOrderItems.length || !gasCustomer.name.trim() || !gasCustomer.address.trim() || !gasDriverId} onClick={createGasJob}>ทำรายการแก๊ส</button>
@@ -4748,6 +4761,7 @@ export default function App() {
                         <span className={`badge ${job.emptyTankReturned ? 'neutral' : 'warning'}`}>
                           {job.emptyTankReturned ? 'คืนถังครบ' : `คืน ${job.returnedTankQuantity ?? 0} ถัง`}
                         </span>
+                        {job.distantDelivery && <span className="badge neutral">ส่งไกล +{formatMoney(job.distantDeliveryFee ?? 0)}</span>}
                       </td>
                       <td><strong>{formatMoney(job.total)}</strong></td>
                     </tr>
