@@ -261,3 +261,18 @@ dialog.shop-wizard {width:min(760px,calc(100% - 1rem));max-height:92dvh;overflow
   .lottery-dial {grid-template-columns:minmax(0,1fr)}
   .gas-brands button,.topup-provider-grid button {flex-direction:column;gap:4px}
 }
+
+/* Manual lottery rollover stays with the owner and preserves payment approvals. */
+.lottery-period-tools { grid-column: 1 / -1; }
+.lottery-reset-control { display: grid; gap: 0.6rem; justify-items: start; margin: 0.6rem 0; }
+.lottery-reset-control > p { margin: 0; color: var(--color-muted); }
+.lottery-reset-backdrop { z-index: 220; padding: 1rem; }
+.lottery-reset-dialog { width: min(580px, 100%); max-height: calc(100dvh - 2rem); overflow-y: auto; display: grid; gap: 1rem; }
+.lottery-reset-dialog h2, .lottery-reset-dialog p { margin: 0; }
+.lottery-reset-summary { display: grid; gap: 0.6rem; background: var(--color-surface-soft); border-radius: 8px; padding: 1rem; }
+.lottery-reset-summary > div { display: flex; justify-content: space-between; gap: 1rem; }
+.lottery-reset-check { display: flex; gap: 0.8rem; align-items: center; min-height: 52px; cursor: pointer; }
+.lottery-reset-check input { width: 24px; height: 24px; flex-shrink: 0; accent-color: var(--color-primary); }
+.lottery-reset-notice { color: var(--color-danger); }
+.lottery-reset-actions { display: flex; gap: 0.8rem; justify-content: flex-end; flex-wrap: wrap; }
+.lottery-reset-actions button { min-height: 48px; }

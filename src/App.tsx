@@ -21,6 +21,7 @@ import { baht, errorText } from './storeOperations';
 import type { StoreSettings, TransferTotals, Transfer } from './storeOperations';
 import { summarizeTransfers, analyticsBucket } from './analytics';
 import { lotteryStockLevel, LOTTERY_PENDING } from './lotteryStock';
+import LotteryStockReset from './components/LotteryStockReset';
 import './App.css';
 import './operations.css';
 
@@ -60,6 +61,7 @@ interface SaleRecordItem {
 
 interface SaleRecord {
   id: string;
+  sessionId?: string;
   channel: SaleChannel;
   createdAt: Date;
   customerName: string;
@@ -1263,6 +1265,7 @@ export default function App() {
   const [lotteryTab, setLotteryTab] = useState<'keypad' | 'map'>('map');
   const [lotteryCheckoutBusy, setLotteryCheckoutBusy] = useState(false);
   const [lotteryApprovalBusy, setLotteryApprovalBusy] = useState('');
+  const [lotteryPendingQueue, setLotteryPendingQueue] = useState<SaleRecord[]>([]);
   const [lotteryApprovalCash, setLotteryApprovalCash] = useState<Record<string, string>>({});
   const [gasBrand, setGasBrand] = useState<GasBrand | ''>('');
   const [posCheckoutOpen, setPosCheckoutOpen] = useState(false);
@@ -1395,7 +1398,7 @@ export default function App() {
   const allowedViews = useMemo(
     () => (Object.keys(viewMeta) as View[])
       .filter((view) => view !== 'CLOSING')
-      .filter((view) => isOwner || (view !== 'STOCK' && view !== 'STAFF' && view !== 'SETTINGS')),
+      .filter((view) => isOwner || ['POS', 'GAS', 'LOTTERY', 'TOPUP'].includes(view)),
     [isOwner],
   );
   const refreshClosingSummary = useCallback(async (targetSessionId = scanSessionId) => {
@@ -1452,7 +1455,7 @@ export default function App() {
       return;
     }
 
-    if (currentView === 'STOCK' || currentView === 'STAFF' || currentView === 'SETTINGS') {
+    if (!['POS', 'GAS', 'LOTTERY', 'TOPUP'].includes(currentView)) {
       setCurrentView('POS');
     }
     setGasPaid(false);
@@ -1508,6 +1511,7 @@ export default function App() {
             setPosCart([]);
             setLotteryCart([]);
             setSalesHistory([]);
+            setLotteryPendingQueue([]);
             setPasswordPanelOpen(false);
             setPasswordResetTarget(undefined);
             setPasswordForm({ currentPassword: '', newPassword: '', confirmPassword: '' });
@@ -1820,6 +1824,17 @@ export default function App() {
     return () => window.clearInterval(timer);
   }, [authSession, scanSessionId, selectedSaleId]);
 
+  useEffect(() => {
+    if (!authSession) return;
+    let disposed = false;
+    const syncPending = () => axios.get<ApiSaleRecord[]>(`${API_BASE_URL}/api/lottery/pending`)
+      .then(({ data }) => { if (!disposed) setLotteryPendingQueue(data.map(normalizeSaleRecord)); })
+      .catch(() => { /* Keep current-session pending orders available during reconnect. */ });
+    void syncPending();
+    const timer = window.setInterval(() => void syncPending(), 3000);
+    return () => { disposed = true; window.clearInterval(timer); };
+  }, [authSession]);
+
   const analyticsQuery = useMemo(() => {
     const params = new URLSearchParams({ period: analyticsPeriod });
 
@@ -2047,7 +2062,7 @@ export default function App() {
       TOPUP: { total: 0, count: 0 },
     },
   );
-  const pendingLotterySales = salesHistory.filter((sale) => sale.channel === 'LOTTERY' && sale.status === LOTTERY_PENDING);
+  const pendingLotterySales = [...new Map([...lotteryPendingQueue.filter(sale => !salesHistory.some(row => row.id === sale.id && row.status !== LOTTERY_PENDING)), ...salesHistory.filter((sale) => sale.channel === 'LOTTERY' && sale.status === LOTTERY_PENDING)].map(sale => [sale.id, sale])).values()];
   const possibleLotteryRevenue = lotteryTickets.reduce((sum, ticket) => sum + ticket.remaining * ticket.price, 0);
   const analyticsPaymentTotals = useMemo(() => {
     const totals = new Map<string, { total: number; count: number }>();
@@ -2185,6 +2200,7 @@ export default function App() {
     setPosCart([]);
     setLotteryCart([]);
     setSalesHistory([]);
+    setLotteryPendingQueue([]);
     setCurrentView('POS');
   }
 
@@ -3324,10 +3340,11 @@ export default function App() {
 
     try {
       const response = await axios.post<ApiSaleRecord>(
-        `${API_BASE_URL}/api/app-sessions/${encodeURIComponent(scanSessionId)}/sales/${encodeURIComponent(sale.id)}/cancel`,
+        `${API_BASE_URL}/api/app-sessions/${encodeURIComponent(sale.sessionId || scanSessionId)}/sales/${encodeURIComponent(sale.id)}/cancel`,
         { reason },
       );
       const cancelledSale = normalizeSaleRecord(response.data);
+      setLotteryPendingQueue(previous => previous.filter(row => row.id !== sale.id));
       setSalesHistory((previous) => previous.map((item) => item.id === sale.id ? cancelledSale : item));
       setSelectedSaleId(cancelledSale.id);
       await refreshProducts();
@@ -3477,6 +3494,7 @@ export default function App() {
       setSelectedSaleId(completedSale.id);
       setLotteryCart(response.data.cart.items.map(normalizeCartItem));
       await refreshLotteryTickets();
+      if (completedSale.status === LOTTERY_PENDING) setLotteryPendingQueue(previous => [completedSale, ...previous.filter(sale => sale.id !== completedSale.id)]);
       setLotteryNotice(completedSale.status === LOTTERY_PENDING ? 'ส่งรายการให้เจ้าของร้านตรวจและยืนยันแล้ว สต็อกหวยถูกกันไว้สำหรับรายการนี้' : `ขายหวยสำเร็จ ${formatMoney(lotterySubtotal)}`);
       setLotteryReceived(0);
     } catch {
@@ -3486,14 +3504,19 @@ export default function App() {
 
   async function confirmLotteryPayment(sale: SaleRecord) {
     if (!isOwner || lotteryApprovalBusy) return;
-    const cashReceived = Number(lotteryApprovalCash[sale.id] ?? sale.reportedCashReceived ?? sale.total);
+    const counted = lotteryApprovalCash[sale.id]?.trim();
+    if (sale.paymentMethod === 'เงินสด' && !counted) {
+      setLotteryNotice('กรอกยอดเงินที่ตรวจนับจริงก่อนยืนยัน'); return;
+    }
+    const cashReceived = sale.paymentMethod === 'เงินสด' ? Number(counted) : sale.total;
     if (!Number.isFinite(cashReceived) || cashReceived < sale.total) {
       setLotteryNotice('เงินที่ตรวจรับจริงต้องไม่น้อยกว่ายอดรายการ'); return;
     }
     setLotteryApprovalBusy(sale.id);
     try {
-      const { data } = await axios.post<ApiSaleRecord>(`${API_BASE_URL}/api/app-sessions/${encodeURIComponent(scanSessionId)}/lottery/${encodeURIComponent(sale.id)}/confirm`, { cashReceived });
+      const { data } = await axios.post<ApiSaleRecord>(`${API_BASE_URL}/api/app-sessions/${encodeURIComponent(sale.sessionId || scanSessionId)}/lottery/${encodeURIComponent(sale.id)}/confirm`, { cashReceived });
       setSalesHistory((previous) => previous.map((row) => row.id === data.id ? normalizeSaleRecord(data) : row));
+      setLotteryPendingQueue(previous => previous.filter(row => row.id !== sale.id));
       setLotteryNotice(`ยืนยันรับเงินรายการ ${sale.id} แล้ว`);
     } catch (error) { setLotteryNotice(errorText(error)); }
     finally { setLotteryApprovalBusy(''); }
@@ -3843,6 +3866,13 @@ export default function App() {
 
     setGasCorrectionDelta('1');
     setGasCorrectionReason('');
+  }
+
+  async function refreshAfterLotteryReset() {
+    await Promise.all([refreshLotteryTickets(), refreshLotteryCart(), refreshStockLog()]);
+    setLotteryReceived(0);
+    setLotteryInput('');
+    setLotteryNotice('เคลียร์สต็อกงวดเดิมแล้ว เริ่มรับสลากงวดใหม่ได้');
   }
 
   async function receiveBook() {
@@ -4479,9 +4509,9 @@ export default function App() {
 
           </div>
           <div className="gas-header-actions">
-            <button className="secondary-action" type="button" onClick={() => setCurrentView('HISTORY')}>
+            {isOwner && <button className="secondary-action" type="button" onClick={() => setCurrentView('HISTORY')}>
               <Icon name="history" /> ประวัติย้อนหลัง
-            </button>
+            </button>}
 
           </div>
         </section>
@@ -4792,7 +4822,7 @@ export default function App() {
             ))}
           </div>
           <label className="field">
-            <span>รับเงิน</span>
+            <span>{isOwner ? 'รับเงิน' : 'เงินที่แจ้งส่งให้เจ้าของร้านตรวจรับ'}</span>
             <input type="number" min="0" value={lotteryReceived || ''} onChange={(event) => setLotteryReceived(Number(event.target.value))} />
           </label>
           <div className="change-box">
@@ -4803,6 +4833,7 @@ export default function App() {
             <Icon name="paid" /> {lotteryCheckoutBusy ? 'กำลังส่งรายการ…' : isOwner ? 'ยืนยันรายการและจ่ายแล้ว' : 'ส่งรายการให้เจ้าของร้านยืนยัน'}
           </button>
         </aside>
+        {isOwner && <div className="lottery-period-tools"><LotteryStockReset api={API_BASE_URL} onReset={refreshAfterLotteryReset} /></div>}
         <section className="panel lottery-approval-panel">
           <PanelTitle icon="fact_check" title={isOwner ? 'รายการหวยรอยืนยัน' : 'รายการหวยของฉันที่รอยืนยัน'} detail="กันสต็อกไว้แล้ว ยอดขายจะนับเมื่อเจ้าของร้านยืนยันรับเงิน" />
           {pendingLotterySales.filter((sale) => isOwner || sale.submittedBy === currentUser?.id).length === 0 ? <EmptyState text="ไม่มีรายการรอยืนยัน" /> :
@@ -4812,8 +4843,9 @@ export default function App() {
                 <p>{sale.items.map((item) => `${item.barcode || item.name} × ${item.quantity}`).join(' · ')}</p>
                 <div>ยอดต้องเก็บ <b>{formatMoney(sale.total)}</b> · {sale.paymentMethod} · แจ้งรับเงิน {formatMoney(sale.reportedCashReceived ?? 0)}</div>
                 {isOwner && <div className="lottery-approval-actions">
-                  {sale.paymentMethod === 'เงินสด' && <label className="field"><span>เงินที่ตรวจรับจริง (บาท)</span><input type="number" min={sale.total} step="0.01" value={lotteryApprovalCash[sale.id] ?? String(sale.reportedCashReceived ?? sale.total)} onChange={(event) => setLotteryApprovalCash({ ...lotteryApprovalCash, [sale.id]: event.target.value })} /></label>}
-                  <button type="button" className="primary-action" disabled={Boolean(lotteryApprovalBusy)} onClick={() => void confirmLotteryPayment(sale)}>ยืนยันรายการ / จ่ายแล้ว</button>
+                  {sale.paymentMethod === 'PromptPay' && <p>ตรวจยอดเงินเข้าแล้วจึงกดยืนยันรับเงินจริง</p>}
+                  {sale.paymentMethod === 'เงินสด' && <label className="field"><span>เงินที่ตรวจรับจริง (บาท)</span><input type="number" min={sale.total} step="0.01" placeholder="กรอกยอดที่ตรวจนับจริง" value={lotteryApprovalCash[sale.id] ?? ''} onChange={(event) => setLotteryApprovalCash({ ...lotteryApprovalCash, [sale.id]: event.target.value })} /></label>}
+                  <button type="button" className="primary-action" disabled={Boolean(lotteryApprovalBusy)} onClick={() => void confirmLotteryPayment(sale)}>ยืนยันว่ารับเงินจริงแล้ว</button>
                   <button type="button" className="secondary-action" disabled={Boolean(lotteryApprovalBusy)} onClick={() => void cancelSaleRecord(sale)}>ยกเลิกรายการ</button>
                 </div>}
               </article>
@@ -5774,6 +5806,7 @@ export default function App() {
 
         <section className="panel wide-panel lottery-stock-panel">
           <PanelTitle icon="confirmation_number" title="Stock หวย" detail={lotteryStockNotice} />
+          {isOwner && <LotteryStockReset api={API_BASE_URL} onReset={refreshAfterLotteryReset} />}
           <div className="book-intake"><h3>รับเล่ม 00–99</h3><label>จำนวนใบต่อเลข<input type="number" min="1" value={lotteryStockDraft.quantity} onChange={e => setLotteryStockDraft({...lotteryStockDraft,quantity:e.target.value})}/></label><label>ราคาต่อใบ<input type="number" min="1" value={lotteryStockDraft.price} onChange={e => setLotteryStockDraft({...lotteryStockDraft,price:e.target.value})}/></label><button className="primary-action" disabled={receivingBook || Number(lotteryStockDraft.quantity)<1 || Number(lotteryStockDraft.price)<=0} onClick={receiveBook}>รับเข้า {100 * Number(lotteryStockDraft.quantity)} ใบ</button></div>
           <details><summary>จัดการเลข 6 หลักเดิม</summary><div className="lottery-stock-form">
             <label className="field">
@@ -6427,6 +6460,7 @@ export default function App() {
   }
 
   function renderPage() {
+    if (!isOwner && !allowedViews.some(view => view === currentView)) return renderPosPage();
     switch (currentView) {
       case 'POS':
         return renderPosPage();
@@ -6487,7 +6521,7 @@ export default function App() {
           </div>
 
           <nav className="nav-list" aria-label="เมนูหลัก">
-            {navigationGroups.map((group) => <div className={group.label === 'จัดการร้าน' ? 'nav-group management-nav' : 'nav-group'} key={group.label}>
+            {navigationGroups.filter((group) => group.views.some((view) => allowedViews.includes(view))).map((group) => <div className={group.label === 'จัดการร้าน' ? 'nav-group management-nav' : 'nav-group'} key={group.label}>
               <p className="nav-group-label">{group.label}</p>
               {group.views.filter((view) => allowedViews.includes(view)).map((view) => (
                 <button
