@@ -67,11 +67,21 @@ export default function GasVoiceInput({ api, onApply, onBusyChange }: GasVoiceIn
   useEffect(() => { applyRef.current = onApply; }, [onApply]);
   useEffect(() => { busyChangeRef.current = onBusyChange; }, [onBusyChange]);
   useEffect(() => {
-    const controller = new AbortController();
-    axios.get<{ enabled: boolean }>(`${api}/api/gas/voice/status`, { signal: controller.signal, timeout: 4000 })
-      .then(({ data }) => { if (!controller.signal.aborted) setUseAI(data.enabled === true); })
-      .catch(() => { /* Older/offline servers keep the local parser available. */ });
-    return () => controller.abort();
+    let disposed = false;
+    let pending: AbortController | null = null;
+    async function check() {
+      if (disposed || pending || document.visibilityState === 'hidden') return;
+      const controller = new AbortController(); pending = controller;
+      try {
+        const { data } = await axios.get<{ enabled: boolean; provider: string }>(`${api}/api/gas/voice/status`, { signal: controller.signal, timeout: 2500 });
+        if (!disposed && !controller.signal.aborted) setUseAI(data.enabled === true && data.provider === 'local');
+      } catch { if (!disposed && !controller.signal.aborted) setUseAI(false); }
+      finally { if (pending === controller) pending = null; }
+    }
+    void check();
+    const timer = window.setInterval(() => void check(), 3000);
+    document.addEventListener('visibilitychange', check);
+    return () => { disposed = true; pending?.abort(); window.clearInterval(timer); document.removeEventListener('visibilitychange', check); };
   }, [api]);
 
   useEffect(() => {
@@ -120,15 +130,16 @@ export default function GasVoiceInput({ api, onApply, onBusyChange }: GasVoiceIn
     setFeedback(null);
     busyChangeRef.current(true);
     try {
-      const { data } = await axios.post<{ draft: GasVoiceDraft }>(`${api}/api/gas/voice/parse`, { text: raw }, { signal: controller.signal, timeout: 15000 });
+      const { data } = await axios.post<{ source: string; draft: GasVoiceDraft }>(`${api}/api/gas/voice/parse`, { text: raw }, { signal: controller.signal, timeout: 6500 });
       if (controller.signal.aborted || requestRef.current !== controller) return;
-      if (!data.draft || !Array.isArray(data.draft.items) || !Array.isArray(data.draft.errors) || !Array.isArray(data.draft.notes)) throw new Error('Invalid interpretation');
+      if (data.source !== 'local' || !data.draft || !Array.isArray(data.draft.items) || !Array.isArray(data.draft.errors) || !Array.isArray(data.draft.notes)) throw new Error('Invalid interpretation');
       const result = applyRef.current(raw, data.draft);
-      setFeedback({ ...result, message: `AI ช่วยแยกข้อความ · ${result.message}` });
+      setFeedback({ ...result, message: `AI ในคอมช่วยแยกข้อความ · ${result.message}` });
     } catch {
       if (controller.signal.aborted || requestRef.current !== controller) return;
+      setUseAI(false);
       const result = applyRef.current(raw);
-      setFeedback({ ...result, message: `AI ยังไม่พร้อม ใช้การแยกคำพื้นฐาน · ${result.message}` });
+      setFeedback({ ...result, message: `AI ในคอมยังไม่พร้อม ใช้การแยกคำพื้นฐาน · ${result.message}` });
     } finally {
       if (requestRef.current === controller) {
         requestRef.current = null;
@@ -243,7 +254,7 @@ export default function GasVoiceInput({ api, onApply, onBusyChange }: GasVoiceIn
     <section className="panel gas-voice-panel" aria-labelledby="gas-voice-title">
       <div className="gas-voice-heading">
         <div>
-          <h3 id="gas-voice-title">พูดรับออร์เดอร์แก๊ส <span>{useAI ? 'AI' : 'ทดลอง'}</span></h3>
+          <h3 id="gas-voice-title">พูดรับออร์เดอร์แก๊ส <span>{useAI ? 'AI ในคอม' : 'rules'}</span></h3>
           <p>“ปตท. ถังใหญ่ 2 ถัง ถังเล็ก 1 ถัง ส่งที่หลังวัด”</p>
           <small>พูดครั้งเดียวเพื่อกรอกฟอร์ม แล้วตรวจข้อมูลก่อนทำรายการ</small>
         </div>
@@ -263,14 +274,14 @@ export default function GasVoiceInput({ api, onApply, onBusyChange }: GasVoiceIn
       </label>
       <div className="gas-voice-footer">
         <p role="status" aria-live="polite" className={feedback?.ok ? 'gas-voice-feedback success' : 'gas-voice-feedback'}>
-          {interpreting ? 'AI กำลังแยกออร์เดอร์…' : busy ? stopping ? 'รอข้อความจากบริการเสียง…' : 'กำลังฟัง… พูดยี่ห้อ ขนาด จำนวน และจุดส่ง' : feedback?.message ?? 'บอกได้หลายขนาด · ถังใหญ่ = 15 กก. · ถังเล็ก = 4 กก. · ไม่บอกจำนวน = ขนาดละ 1 ถัง'}
+          {interpreting ? 'AI ในคอมกำลังแยกออร์เดอร์…' : busy ? stopping ? 'รอข้อความจากบริการเสียง…' : 'กำลังฟัง… พูดยี่ห้อ ขนาด จำนวน และจุดส่ง' : feedback?.message ?? 'บอกได้หลายขนาด · ถังใหญ่ = 15 กก. · ถังเล็ก = 4 กก. · ไม่บอกจำนวน = ขนาดละ 1 ถัง'}
         </p>
         {interpreting ? <button type="button" className="secondary-action" onClick={cancelInterpretation}>ยกเลิกการแยกข้อความ</button> :
           <button type="button" className="secondary-action" disabled={locked || !text.trim()} onClick={() => void interpretAndApply(text)}>กรอกฟอร์มจากข้อความ</button>}
       </div>
       {(!supported || !secure) && <p className="gas-voice-hint">{!secure ? 'เปิดผ่าน HTTPS เพื่อใช้ไมค์บนหน้าเว็บ' : 'เบราว์เซอร์นี้ยังใช้ปุ่มพูดไม่ได้'} · แตะช่องข้อความแล้วใช้ไมค์บนคีย์บอร์ดแทนได้ จากนั้นกดกรอกฟอร์ม</p>}
       <small className="gas-voice-privacy">เสียงประมวลผลผ่านบริการของเบราว์เซอร์ ซึ่งอาจส่งเสียงไปยังผู้ให้บริการ · ร้านไม่บันทึกไฟล์เสียง</small>
-      <small className="gas-voice-privacy">{useAI ? 'ข้อความออร์เดอร์ส่งให้ Cloudflare ช่วยตีความ กรุณาตรวจข้อมูลก่อนทำรายการ' : 'ขณะนี้ใช้การแยกคำพื้นฐาน'}</small>
+      <small className="gas-voice-privacy">{useAI ? 'AI ในคอมพร้อม · ข้อความออร์เดอร์ส่งให้คอมที่เชื่อมกับร้านช่วยแยก กรุณาตรวจข้อมูลก่อนทำรายการ' : 'ใช้ตัวแยกคำพื้นฐาน · คอม AI ยังไม่พร้อม ระบบจะเชื่อมให้อัตโนมัติเมื่อพร้อม'}</small>
     </section>
   );
 }

@@ -20,6 +20,7 @@ const pageErrors = [];
 const interpretations = [];
 
 async function setup({ unsupported = false, prefixed = false, ai = false, aiBehavior = 'success' } = {}) {
+  let aiAvailable = ai;
   const context = await browser.newContext({ viewport: { width: 1024, height: 768 } });
   await context.addInitScript(({ unsupported, prefixed }) => {
     sessionStorage.setItem('tingkum.authSession.v1', JSON.stringify({ token: 'mock-test-token', expiresAt: '2099-01-01', user: { id: 1, username: 'test', displayName: 'ทดสอบ', role: 'owner', active: true } }));
@@ -44,12 +45,12 @@ async function setup({ unsupported = false, prefixed = false, ai = false, aiBeha
     const path = new URL(request.url()).pathname;
     if (request.method() !== 'GET' && path !== '/api/gas/voice/parse') writes.push({ method: request.method(), url: request.url() });
     let data = [];
-    if (path === '/api/gas/voice/status') data = { enabled: ai, provider: ai ? 'cloudflare' : 'rules' };
+    if (path === '/api/gas/voice/status') data = { enabled: aiAvailable, provider: aiAvailable ? 'local' : 'rules' };
     else if (path === '/api/gas/voice/parse') {
       interpretations.push(request.postDataJSON().text);
       if (aiBehavior === 'quota') return route.fulfill({ status: 429, contentType: 'application/json', headers: { 'access-control-allow-origin': '*' }, body: JSON.stringify({ code: 'VOICE_AI_LIMIT' }) });
       if (aiBehavior === 'delayed') await new Promise(resolve => setTimeout(resolve, 300));
-      data = { source: 'cloudflare', draft: { brand: 'ปตท', items: [{ sizeKg: 15, quantity: 2 }, { sizeKg: 4, quantity: 1 }], customerName: 'คุณเจเจ', address: 'ดอนภูตา', notes: [], errors: aiBehavior === 'clarify' ? ['กรุณายืนยันจำนวนถัง'] : [] } };
+      data = { source: 'local', draft: { brand: 'ปตท', items: [{ sizeKg: 15, quantity: 2 }, { sizeKg: 4, quantity: 1 }], customerName: 'คุณเจเจ', address: 'ดอนภูตา', notes: [], errors: aiBehavior === 'clarify' ? ['กรุณายืนยันจำนวนถัง'] : [] } };
     }
     else if (/\/app-sessions\/[^/]+$/.test(path)) data = { session_id: decodeURIComponent(path.split('/').at(-1)), status: 'OPEN', previousClosedSession: null };
     else if (path.endsWith('/gas')) data = { items, jobs: [], pendingReturns: [] };
@@ -62,8 +63,8 @@ async function setup({ unsupported = false, prefixed = false, ai = false, aiBeha
   page.on('pageerror', (error) => pageErrors.push(error.message));
   await page.goto(baseUrl);
   await page.getByRole('navigation', { name: 'เมนูหลัก' }).getByRole('button', { name: 'ขายแก๊ส' }).click();
-  await page.getByRole('heading', { name: `พูดรับออร์เดอร์แก๊ส ${ai ? 'AI' : 'ทดลอง'}`, exact: true }).waitFor();
-  return { context, page };
+  await page.getByRole('heading', { name: `พูดรับออร์เดอร์แก๊ส ${ai ? 'AI ในคอม' : 'rules'}`, exact: true }).waitFor();
+  return { context, page, setAIAvailable: value => { aiAvailable = value; } };
 }
 
 async function applyText(page, text) {
@@ -150,7 +151,7 @@ try {
   // Both iPad orientations and a small phone remain within the viewport.
   for (const viewport of [{ width: 1024, height: 768 }, { width: 768, height: 1024 }, { width: 390, height: 844 }]) {
     await page.setViewportSize(viewport);
-    await page.getByRole('heading', { name: 'พูดรับออร์เดอร์แก๊ส ทดลอง' }).scrollIntoViewIfNeeded();
+    await page.getByRole('heading', { name: 'พูดรับออร์เดอร์แก๊ส rules' }).scrollIntoViewIfNeeded();
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true, JSON.stringify(viewport));
     const mic = await page.getByRole('button', { name: 'แตะเพื่อพูด' }).boundingBox();
     assert.ok(mic.height >= 56);
@@ -181,7 +182,7 @@ try {
 
   const ai = await setup({ ai: true });
   await applyText(ai.page, 'ส่งปตทถังใหญ่ 2 ถัง ถังเล็ก 1 ถังให้คุณเจเจที่ดอนภูตา');
-  await ai.page.getByText('AI ช่วยแยกข้อความ', { exact: false }).waitFor();
+  await ai.page.getByText('AI ในคอมช่วยแยกข้อความ', { exact: false }).waitFor();
   assert.equal(await ai.page.getByLabel('ชื่อลูกค้า', { exact: true }).inputValue(), 'คุณเจเจ');
   assert.equal(await ai.page.getByLabel('ชื่อที่อยู่ / จุดหมายปลายทาง').inputValue(), 'ดอนภูตา');
   assert.match(await ai.page.locator('.gas-details-panel').innerText(), /15 กก. × 2, ถังแก๊ส 4 กก. × 1/);
@@ -189,7 +190,7 @@ try {
 
   const quota = await setup({ ai: true, aiBehavior: 'quota' });
   await applyText(quota.page, 'ส่งปตทถังใหญ่ 1 ถังให้คุณเจเจที่ดอนภูตา');
-  await quota.page.getByText('AI ยังไม่พร้อม ใช้การแยกคำพื้นฐาน', { exact: false }).waitFor();
+  await quota.page.getByText('AI ในคอมยังไม่พร้อม ใช้การแยกคำพื้นฐาน', { exact: false }).waitFor();
   assert.equal(await quota.page.getByLabel('ชื่อลูกค้า', { exact: true }).inputValue(), 'คุณเจเจ');
   await quota.context.close();
 
@@ -206,6 +207,14 @@ try {
   assert.equal(await delayed.page.locator('.gas-details-panel').count(), 0);
   assert.match(await delayed.page.locator('.gas-voice-feedback').innerText(), /ยกเลิกการแยกข้อความแล้ว/);
   await delayed.context.close();
+  const switching = await setup();
+  await switching.page.getByLabel('ข้อความที่พูด · แก้ไขหรือพิมพ์เองได้').fill('ข้อความที่กำลังพิมพ์');
+  switching.setAIAvailable(true);
+  await switching.page.getByRole('heading', { name: 'พูดรับออร์เดอร์แก๊ส AI ในคอม', exact: true }).waitFor({ timeout: 6000 });
+  switching.setAIAvailable(false);
+  await switching.page.getByRole('heading', { name: 'พูดรับออร์เดอร์แก๊ส rules', exact: true }).waitFor({ timeout: 6000 });
+  assert.equal(await switching.page.getByLabel('ข้อความที่พูด · แก้ไขหรือพิมพ์เองได้').inputValue(), 'ข้อความที่กำลังพิมพ์');
+  await switching.context.close();
   assert.deepEqual(pageErrors, []);
   assert.deepEqual(writes, []);
   assert.equal(interpretations.length, 4);
