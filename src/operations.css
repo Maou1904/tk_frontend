@@ -214,26 +214,37 @@ dialog.shop-wizard {width:min(760px,calc(100% - 1rem));max-height:92dvh;overflow
 .counter-keys button:active {background:#d1e8df}
 .cash-dial output {display:block;text-align:right;font-size:1.8rem;font-weight:700;margin:8px 0 16px}
 .transfer-page .operation-form-grid input {font-size:1.35rem;min-height:56px}
-.gas-sales-page.gas-step-selection {grid-template-columns:minmax(0,1fr);grid-template-areas:"header" "voice" "tanks" "recent" "follow"}
-.gas-sales-page.gas-step-delivery {grid-template-columns:minmax(0,1.2fr) minmax(0,1fr);grid-template-areas:"header header" "voice voice" "details status" "recent recent" "follow follow"}
-.gas-voice-panel {grid-area:voice;min-width:0;border:2px solid var(--color-primary);display:grid;gap:14px}
-.gas-voice-heading {display:flex;align-items:center;justify-content:space-between;gap:18px;flex-wrap:wrap}
-.gas-voice-heading h3 {margin:0;font-size:1.25rem;color:var(--color-primary-darker)}
-.gas-voice-heading h3 span {display:inline-block;margin-inline-start:8px;padding:3px 9px;border-radius:6px;background:var(--color-primary-soft);font-size:.875rem;font-weight:500}
-.gas-voice-heading p {margin:8px 0 4px;font-size:1.125rem}
-.gas-voice-heading small,.gas-voice-privacy {color:var(--color-muted);font-size:.875rem}
-.gas-voice-actions {display:flex;align-items:center;gap:10px;flex-wrap:wrap}
-.gas-voice-actions button,.gas-voice-footer button {min-height:56px;font-size:1rem}
-.gas-voice-record {display:flex;align-items:center;justify-content:center;gap:10px;padding:12px 22px;border:2px solid var(--color-primary);border-radius:12px;background:var(--color-primary);color:white;font-weight:650;min-width:190px}
-.gas-voice-record .material-symbols-outlined {font-size:30px}
+.gas-sales-page {display:block}
+.gas-sales-page .gas-sale-header {margin-bottom:12px}
+.gas-tabs {width:min(100%,420px);margin-bottom:14px}
+.gas-tabs button {min-height:48px}
+.gas-tabs button[aria-selected="true"] {background:white;color:var(--color-primary-dark);box-shadow:0 1px 3px #14253b1a}
+.gas-sale-workspace,.gas-tracking-workspace {display:grid;gap:16px;min-width:0;align-items:start}
+.gas-sale-workspace.gas-step-selection {grid-template-columns:minmax(0,1fr);grid-template-areas:"voice" "tanks"}
+.gas-sale-workspace.gas-step-delivery {grid-template-columns:minmax(0,1.2fr) minmax(0,1fr);grid-template-areas:"voice voice" "details status"}
+.gas-tracking-workspace {grid-template-columns:minmax(0,1fr);grid-template-areas:"follow" "recent"}
+.gas-sale-workspace[hidden],.gas-tracking-workspace[hidden],.gas-voice-panel[hidden] {display:none}
+.gas-voice-panel {grid-area:voice;min-width:0;padding:12px 14px;border:1px solid var(--color-border-soft);display:grid;gap:8px;box-shadow:none}
+.gas-voice-controls {display:flex;align-items:center;gap:12px}
+.gas-voice-example {margin:0;color:var(--color-muted);font-size:.875rem;line-height:1.6}
+.gas-voice-example > span {font-weight:600;color:var(--color-text);margin-inline-end:6px}
+.gas-voice-actions {display:flex;align-items:center;gap:6px;flex-shrink:0;flex-wrap:wrap}
+.gas-voice-actions button,.gas-voice-result-row button {min-height:44px;font-size:.9rem}
+.gas-voice-record {display:flex;align-items:center;justify-content:center;gap:6px;padding:8px 12px;border:1px solid var(--color-primary);border-radius:8px;background:var(--color-primary);color:white;font-weight:600;white-space:nowrap}
+.gas-voice-record .material-symbols-outlined {font-size:22px}
 .gas-voice-record.recording {background:var(--color-danger);border-color:var(--color-danger)}
 .gas-voice-record:disabled {opacity:.6}
-.gas-voice-panel textarea {width:100%;min-height:84px;font-size:1.1rem;resize:vertical}
-.gas-voice-footer {display:flex;align-items:center;justify-content:space-between;gap:16px;flex-wrap:wrap}
-.gas-voice-footer button {flex-shrink:0}
-.gas-voice-feedback {margin:0;flex:1 1 280px;font-size:1rem;line-height:1.7;overflow-wrap:anywhere}
+.gas-voice-result {display:grid;gap:4px;min-width:0}
+.gas-voice-label {font-size:.8rem;color:var(--color-muted)}
+.gas-voice-result-row {display:flex;align-items:flex-start;gap:8px;min-width:0}
+.gas-voice-result-row button {flex-shrink:0;padding:8px 12px}
+.gas-voice-panel textarea {flex:1;min-width:0;width:100%;height:44px;min-height:44px;font-size:1rem;line-height:1.5;resize:vertical}
+.gas-voice-feedback {margin:0;font-size:.85rem;line-height:1.6;overflow-wrap:anywhere}
 .gas-voice-feedback.success {color:var(--color-primary-dark)}
 .gas-voice-hint {margin:0;padding:10px 12px;border-radius:8px;background:var(--color-surface-soft);font-size:.95rem}
+.gas-voice-parser-status {display:flex;align-items:center;gap:6px;color:var(--color-muted);font-size:.75rem;line-height:1.5}
+.gas-voice-parser-status > span {width:6px;height:6px;border-radius:50%;background:#8b96a5;flex-shrink:0}
+.gas-voice-parser-status.online > span {background:var(--color-primary)}
 .gas-brands {grid-template-columns:repeat(2,minmax(0,1fr))}
 .gas-brands button {display:flex;align-items:center;justify-content:center;gap:14px;min-height:96px;font-size:1.45rem}
 .gas-brands img {width:80px;height:58px;object-fit:contain;background:white;border-radius:8px;padding:4px}
@@ -256,8 +267,10 @@ dialog.shop-wizard {width:min(760px,calc(100% - 1rem));max-height:92dvh;overflow
   .topup-page {grid-template-columns:minmax(0,1fr)}
 }
 @media(max-width:650px) {
-  .gas-sales-page.gas-step-delivery {grid-template-columns:minmax(0,1fr);grid-template-areas:"header" "voice" "details" "status" "recent" "follow"}
-  .gas-voice-actions,.gas-voice-actions button,.gas-voice-footer button {width:100%}
+  .gas-sale-workspace.gas-step-delivery {grid-template-columns:minmax(0,1fr);grid-template-areas:"voice" "details" "status"}
+  .gas-voice-controls {align-items:flex-start;flex-direction:column;gap:6px}
+  .gas-voice-result-row {flex-wrap:wrap}
+  .gas-voice-result-row textarea {flex-basis:100%}
   .lottery-dial {grid-template-columns:minmax(0,1fr)}
   .gas-brands button,.topup-provider-grid button {flex-direction:column;gap:4px}
 }

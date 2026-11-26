@@ -1261,6 +1261,7 @@ export default function App() {
   );
   const [checkoutStep, setCheckoutStep] = useState(0);
   const [amountBuffer, setAmountBuffer] = useState('');
+  const [gasTab, setGasTab] = useState<'sale' | 'tracking'>('sale');
   const [gasStep, setGasStep] = useState<'selection' | 'delivery'>('selection');
   const [lotteryTab, setLotteryTab] = useState<'keypad' | 'map'>('map');
   const [lotteryCheckoutBusy, setLotteryCheckoutBusy] = useState(false);
@@ -4516,7 +4517,21 @@ export default function App() {
           </div>
         </section>
 
-        <GasVoiceInput key={gasVoiceSession} api={API_BASE_URL} onApply={applyGasVoice} onBusyChange={setGasVoiceBusy} />
+        <div className="touch-options workspace-switcher gas-tabs" role="tablist" aria-label="มุมมองแก๊ส"
+          onKeyDown={(event) => {
+            if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
+            event.preventDefault();
+            const next = event.key === 'Home' ? 'sale' : event.key === 'End' ? 'tracking' : gasTab === 'sale' ? 'tracking' : 'sale';
+            setGasTab(next);
+            event.currentTarget.querySelector<HTMLButtonElement>(`#gas-${next}-tab`)?.focus();
+          }}>
+          <button id="gas-sale-tab" type="button" role="tab" aria-selected={gasTab === 'sale'} tabIndex={gasTab === 'sale' ? 0 : -1}
+            aria-controls="gas-sale-panel" onClick={() => setGasTab('sale')}>ขายแก๊ส</button>
+          <button id="gas-tracking-tab" type="button" role="tab" aria-selected={gasTab === 'tracking'} tabIndex={gasTab === 'tracking' ? 0 : -1}
+            aria-controls="gas-tracking-panel" onClick={() => setGasTab('tracking')}>ติดตามรายการ</button>
+        </div>
+        <div id="gas-sale-panel" role="tabpanel" aria-labelledby="gas-sale-tab" className={`gas-sale-workspace gas-step-${gasStep}`} hidden={gasTab !== 'sale'}>
+        <GasVoiceInput key={gasVoiceSession} api={API_BASE_URL} active={gasTab === 'sale'} onApply={applyGasVoice} onBusyChange={setGasVoiceBusy} />
 
         {gasStep === 'selection' && <section className="panel gas-tank-panel">
           <PanelTitle icon="propane_tank" title="เลือกยี่ห้อแก๊ส" detail={gasNotice} />
@@ -4605,6 +4620,96 @@ export default function App() {
           </div>
         </section>}
 
+        {gasStep === 'delivery' && <aside className="panel gas-status-panel">
+          <PanelTitle icon="fact_check" title="สถานะ" />
+          <div className="gas-status-controls">
+            <div className="gas-return-control">
+              <div>
+                <span><Icon name="sync_alt" /> คืนถังเปล่า</span>
+                <strong>{gasReturnedCount} / {gasSelectedCount}</strong>
+              </div>
+              <div className="stepper large">
+                <button type="button" onClick={() => updateGasReturnedTankQuantity(-1)} disabled={gasReturnedCount <= 0}>
+                  <Icon name="remove" />
+                </button>
+                <span>{gasReturnedCount}</span>
+                <button type="button" onClick={() => updateGasReturnedTankQuantity(1)} disabled={gasReturnedCount >= gasSelectedCount}>
+                  <Icon name="add" />
+                </button>
+              </div>
+              <small>{gasPendingTankCount > 0 ? `จะค้างถัง ${gasPendingTankCount} ถัง` : 'คืนครบตามจำนวนที่ขาย'}</small>
+            </div>
+
+            <label className={`gas-status-toggle ${gasPaid ? 'active' : ''}`}>
+              <span><Icon name="payments" /> จ่ายแล้ว</span>
+              <input type="checkbox" checked={gasPaid} disabled={!isOwner} onChange={(event) => setGasPaid(event.target.checked)} />
+              <i></i>
+            </label>
+          </div>
+
+          <div className="gas-summary-lines">
+            <div><span>ถังเต็มคงเหลือ</span><strong>{gasFullStockTotal}</strong></div>
+            <div><span>ถังเปล่าคงเหลือ</span><strong>{gasEmptyStockTotal}</strong></div>
+            <div><span>ถังรวมในระบบ</span><strong>{gasStockTotal}</strong></div>
+            <div><span>จำนวนถัง</span><strong>{gasSelectedCount}</strong></div>
+            <div><span>ราคาสินค้า</span><strong>{formatMoney(gasSubtotal)}</strong></div>
+            <label>
+              <span>ค่าส่ง</span>
+              <input type="number" min="0" value={gasDeliveryFee || ''} onChange={(event) => setGasDeliveryFee(Number(event.target.value))} />
+            </label>
+            <div className="gas-net-total"><span>ยอดรวมสุทธิ</span><strong>{formatMoney(gasTotal)}</strong></div>
+          </div>
+          <button className="primary-action" disabled={gasVoiceBusy || !gasBrand || !gasOrderItems.length || !gasCustomer.name.trim() || !gasCustomer.address.trim() || !gasDriverId} onClick={createGasJob}>ทำรายการแก๊ส</button>
+        </aside>}
+
+        </div>
+        <div id="gas-tracking-panel" role="tabpanel" aria-labelledby="gas-tracking-tab" className="gas-tracking-workspace" hidden={gasTab !== 'tracking'}>
+        <section className="panel gas-followup-panel">
+          <PanelTitle
+            icon="pending_actions"
+            title="ติดตามรายการค้าง"
+            detail={`${activeGasJobs.length} งานยังไม่ปิด | ${pendingGasReturns.length} รายการยังไม่คืนถัง`}
+          />
+          <div className="gas-followup-grid">
+            {activeGasJobs.length === 0 && pendingGasReturns.length === 0 ? (
+              <EmptyState text="ไม่มีรายการที่ต้องติดตาม" />
+            ) : (
+              <>
+                {activeGasJobs.map((job) => (
+                  <div className="gas-followup-card" key={`open-${job.id}`}>
+                    <div>
+                      <span className="badge warning">{job.paid ? 'รอปิดงาน' : 'ค้างจ่าย'}</span>
+                      <strong>{job.customerName}</strong>
+                      <small>{job.createdAt} | {job.driver} | {formatMoney(job.total)}</small>
+                    </div>
+                    <div className="row-actions">
+                      <button type="button" disabled={!isOwner} onClick={() => completeGasJob(job.id)}>ปิดงาน</button>
+                      <button className="link-button danger" type="button" disabled={!isOwner} onClick={() => cancelGasJob(job.id)}>ยกเลิก</button>
+                    </div>
+                  </div>
+                ))}
+
+                {pendingGasReturns.map((item) => (
+                  <div className="gas-followup-card" key={`return-${item.id}`}>
+                    <div>
+                      <span className="badge warning">ค้างถัง</span>
+                      <strong>{item.customerName} - {item.tankName} x {item.quantity}</strong>
+                      <small>{item.phone} | {item.borrowedAt}</small>
+                    </div>
+                    <div className="gas-return-action">
+                      <div className="stepper">
+                        <button type="button" disabled={!isOwner} onClick={() => updatePendingReturnQuantity(item, -1)}><Icon name="remove" /></button>
+                        <span>{pendingReturnQuantityFor(item)}</span>
+                        <button type="button" disabled={!isOwner} onClick={() => updatePendingReturnQuantity(item, 1)}><Icon name="add" /></button>
+                      </div>
+                      <button type="button" disabled={!isOwner} onClick={() => completeGasReturn(item.id, pendingReturnQuantityFor(item))}>รับคืน</button>
+                    </div>
+                  </div>
+                ))}
+              </>
+            )}
+          </div>
+        </section>
         <section className="panel gas-recent-panel">
           <PanelTitle icon="receipt_long" title="รายการล่าสุด" detail={`${gasSaleCount} รายการวันนี้`} />
           <div className="gas-recent-table">
@@ -4653,94 +4758,7 @@ export default function App() {
           </div>
         </section>
 
-        {gasStep === 'delivery' && <aside className="panel gas-status-panel">
-          <PanelTitle icon="fact_check" title="สถานะ" />
-          <div className="gas-status-controls">
-            <div className="gas-return-control">
-              <div>
-                <span><Icon name="sync_alt" /> คืนถังเปล่า</span>
-                <strong>{gasReturnedCount} / {gasSelectedCount}</strong>
-              </div>
-              <div className="stepper large">
-                <button type="button" onClick={() => updateGasReturnedTankQuantity(-1)} disabled={gasReturnedCount <= 0}>
-                  <Icon name="remove" />
-                </button>
-                <span>{gasReturnedCount}</span>
-                <button type="button" onClick={() => updateGasReturnedTankQuantity(1)} disabled={gasReturnedCount >= gasSelectedCount}>
-                  <Icon name="add" />
-                </button>
-              </div>
-              <small>{gasPendingTankCount > 0 ? `จะค้างถัง ${gasPendingTankCount} ถัง` : 'คืนครบตามจำนวนที่ขาย'}</small>
-            </div>
-
-            <label className={`gas-status-toggle ${gasPaid ? 'active' : ''}`}>
-              <span><Icon name="payments" /> จ่ายแล้ว</span>
-              <input type="checkbox" checked={gasPaid} disabled={!isOwner} onChange={(event) => setGasPaid(event.target.checked)} />
-              <i></i>
-            </label>
-          </div>
-
-          <div className="gas-summary-lines">
-            <div><span>ถังเต็มคงเหลือ</span><strong>{gasFullStockTotal}</strong></div>
-            <div><span>ถังเปล่าคงเหลือ</span><strong>{gasEmptyStockTotal}</strong></div>
-            <div><span>ถังรวมในระบบ</span><strong>{gasStockTotal}</strong></div>
-            <div><span>จำนวนถัง</span><strong>{gasSelectedCount}</strong></div>
-            <div><span>ราคาสินค้า</span><strong>{formatMoney(gasSubtotal)}</strong></div>
-            <label>
-              <span>ค่าส่ง</span>
-              <input type="number" min="0" value={gasDeliveryFee || ''} onChange={(event) => setGasDeliveryFee(Number(event.target.value))} />
-            </label>
-            <div className="gas-net-total"><span>ยอดรวมสุทธิ</span><strong>{formatMoney(gasTotal)}</strong></div>
-          </div>
-          <button className="primary-action" disabled={gasVoiceBusy || !gasBrand || !gasOrderItems.length || !gasCustomer.name.trim() || !gasCustomer.address.trim() || !gasDriverId} onClick={createGasJob}>ทำรายการแก๊ส</button>
-        </aside>}
-
-        <section className="panel gas-followup-panel">
-          <PanelTitle
-            icon="pending_actions"
-            title="ติดตามรายการค้าง"
-            detail={`${activeGasJobs.length} งานยังไม่ปิด | ${pendingGasReturns.length} รายการยังไม่คืนถัง`}
-          />
-          <div className="gas-followup-grid">
-            {activeGasJobs.length === 0 && pendingGasReturns.length === 0 ? (
-              <EmptyState text="ไม่มีรายการที่ต้องติดตาม" />
-            ) : (
-              <>
-                {activeGasJobs.map((job) => (
-                  <div className="gas-followup-card" key={`open-${job.id}`}>
-                    <div>
-                      <span className="badge warning">{job.paid ? 'รอปิดงาน' : 'ค้างจ่าย'}</span>
-                      <strong>{job.customerName}</strong>
-                      <small>{job.createdAt} | {job.driver} | {formatMoney(job.total)}</small>
-                    </div>
-                    <div className="row-actions">
-                      <button type="button" disabled={!isOwner} onClick={() => completeGasJob(job.id)}>ปิดงาน</button>
-                      <button className="link-button danger" type="button" disabled={!isOwner} onClick={() => cancelGasJob(job.id)}>ยกเลิก</button>
-                    </div>
-                  </div>
-                ))}
-
-                {pendingGasReturns.map((item) => (
-                  <div className="gas-followup-card" key={`return-${item.id}`}>
-                    <div>
-                      <span className="badge warning">ค้างถัง</span>
-                      <strong>{item.customerName} - {item.tankName} x {item.quantity}</strong>
-                      <small>{item.phone} | {item.borrowedAt}</small>
-                    </div>
-                    <div className="gas-return-action">
-                      <div className="stepper">
-                        <button type="button" disabled={!isOwner} onClick={() => updatePendingReturnQuantity(item, -1)}><Icon name="remove" /></button>
-                        <span>{pendingReturnQuantityFor(item)}</span>
-                        <button type="button" disabled={!isOwner} onClick={() => updatePendingReturnQuantity(item, 1)}><Icon name="add" /></button>
-                      </div>
-                      <button type="button" disabled={!isOwner} onClick={() => completeGasReturn(item.id, pendingReturnQuantityFor(item))}>รับคืน</button>
-                    </div>
-                  </div>
-                ))}
-              </>
-            )}
-          </div>
-        </section>
+        </div>
       </div>
     );
   }

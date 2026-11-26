@@ -63,7 +63,7 @@ async function setup({ unsupported = false, prefixed = false, ai = false, aiBeha
   page.on('pageerror', (error) => pageErrors.push(error.message));
   await page.goto(baseUrl);
   await page.getByRole('navigation', { name: 'เมนูหลัก' }).getByRole('button', { name: 'ขายแก๊ส' }).click();
-  await page.getByRole('heading', { name: `พูดรับออร์เดอร์แก๊ส ${ai ? 'AI ในคอม' : 'rules'}`, exact: true }).waitFor();
+  await page.locator('.gas-voice-parser-status').filter({ hasText: ai ? 'AI ในคอมพร้อม' : 'rules' }).waitFor();
   return { context, page, setAIAvailable: value => { aiAvailable = value; } };
 }
 
@@ -74,6 +74,8 @@ async function applyText(page, text) {
 
 try {
   const { context, page } = await setup();
+  assert.ok((await page.locator('.gas-voice-panel').boundingBox()).height < 210);
+  assert.equal(await page.locator('.gas-followup-panel').isVisible(), false);
   await page.getByRole('button', { name: 'แตะเพื่อพูด' }).click();
   assert.equal(await page.evaluate(() => window.__voice.instances.at(-1).lang), 'th-TH');
   await page.evaluate(() => window.__emitVoice('เอ่อ ส่งแก๊สถังใหญ่ บ้านคุณสมชายปตท.'));
@@ -148,13 +150,31 @@ try {
   await page.getByRole('button', { name: 'ยกเลิกการฟัง' }).click();
   assert.equal(await page.getByLabel('ชื่อลูกค้า', { exact: true }).inputValue(), 'คุณสมชาย');
 
+  // Tracking is separate, and switching preserves the form and transcript.
+  const retainedText = await page.getByLabel('ข้อความที่พูด · แก้ไขหรือพิมพ์เองได้').inputValue();
+  await page.getByRole('tab', { name: 'ติดตามรายการ', exact: true }).click();
+  assert.equal(await page.locator('.gas-voice-panel').isVisible(), false);
+  assert.equal(await page.locator('.gas-followup-panel').isVisible(), true);
+  assert.equal(await page.locator('.gas-recent-panel').isVisible(), true);
+  await page.getByRole('tab', { name: 'ติดตามรายการ', exact: true }).press('ArrowLeft');
+  assert.equal(await page.getByRole('tab', { name: 'ขายแก๊ส', exact: true }).getAttribute('aria-selected'), 'true');
+  assert.equal(await page.getByLabel('ชื่อลูกค้า', { exact: true }).inputValue(), 'คุณสมชาย');
+  assert.equal(await page.getByLabel('ข้อความที่พูด · แก้ไขหรือพิมพ์เองได้').inputValue(), retainedText);
+  await page.getByRole('button', { name: 'แตะเพื่อพูด' }).click();
+  const abortsBeforeTab = await page.evaluate(() => window.__voice.aborts);
+  await page.getByRole('tab', { name: 'ติดตามรายการ', exact: true }).click();
+  assert.ok(await page.evaluate(() => window.__voice.aborts) > abortsBeforeTab);
+  await page.getByRole('tab', { name: 'ขายแก๊ส', exact: true }).click();
+  assert.equal(await page.getByRole('button', { name: 'แตะเพื่อพูด' }).isEnabled(), true);
+
   // Both iPad orientations and a small phone remain within the viewport.
   for (const viewport of [{ width: 1024, height: 768 }, { width: 768, height: 1024 }, { width: 390, height: 844 }]) {
     await page.setViewportSize(viewport);
-    await page.getByRole('heading', { name: 'พูดรับออร์เดอร์แก๊ส rules' }).scrollIntoViewIfNeeded();
+    await page.getByRole('region', { name: 'พูดรับออร์เดอร์แก๊ส', exact: true }).scrollIntoViewIfNeeded();
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true, JSON.stringify(viewport));
     const mic = await page.getByRole('button', { name: 'แตะเพื่อพูด' }).boundingBox();
-    assert.ok(mic.height >= 56);
+    assert.ok(mic.height >= 44);
+    assert.ok(mic.width < 190);
     if (artifactDir) await page.screenshot({ path: `${artifactDir}/gas-voice-${viewport.width}.png`, fullPage: true });
   }
   await page.setViewportSize({ width: 1024, height: 768 });
@@ -207,17 +227,38 @@ try {
   assert.equal(await delayed.page.locator('.gas-details-panel').count(), 0);
   assert.match(await delayed.page.locator('.gas-voice-feedback').innerText(), /ยกเลิกการแยกข้อความแล้ว/);
   await delayed.context.close();
+  const hiddenAI = await setup({ ai: true, aiBehavior: 'delayed' });
+  await applyText(hiddenAI.page, 'ส่งปตทถังใหญ่ 2 ถัง ถังเล็ก 1 ถังให้คุณเจเจที่ดอนภูตา');
+  await hiddenAI.page.getByRole('button', { name: 'ยกเลิกการแยกข้อความ' }).waitFor();
+  await hiddenAI.page.getByRole('tab', { name: 'ติดตามรายการ', exact: true }).click();
+  await hiddenAI.page.waitForTimeout(400);
+  await hiddenAI.page.getByRole('tab', { name: 'ขายแก๊ส', exact: true }).click();
+  assert.equal(await hiddenAI.page.locator('.gas-details-panel').count(), 0);
+  assert.equal(await hiddenAI.page.getByRole('button', { name: 'แตะเพื่อพูด' }).isEnabled(), true);
+  await hiddenAI.context.close();
+  const compact = await setup();
+  for (const viewport of [{ width: 1024, height: 768 }, { width: 768, height: 1024 }, { width: 390, height: 844 }]) {
+    await compact.page.setViewportSize(viewport);
+    assert.equal(await compact.page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
+    const panel = await compact.page.locator('.gas-voice-panel').boundingBox();
+    assert.ok(panel.height < (viewport.width > 650 ? 210 : 260));
+    if (artifactDir) await compact.page.screenshot({ path: `${artifactDir}/gas-compact-${viewport.width}.png`, fullPage: true });
+    await compact.page.getByRole('tab', { name: 'ติดตามรายการ', exact: true }).click();
+    if (artifactDir) await compact.page.screenshot({ path: `${artifactDir}/gas-tracking-${viewport.width}.png`, fullPage: true });
+    await compact.page.getByRole('tab', { name: 'ขายแก๊ส', exact: true }).click();
+  }
+  await compact.context.close();
   const switching = await setup();
   await switching.page.getByLabel('ข้อความที่พูด · แก้ไขหรือพิมพ์เองได้').fill('ข้อความที่กำลังพิมพ์');
   switching.setAIAvailable(true);
-  await switching.page.getByRole('heading', { name: 'พูดรับออร์เดอร์แก๊ส AI ในคอม', exact: true }).waitFor({ timeout: 6000 });
+  await switching.page.locator('.gas-voice-parser-status').filter({ hasText: 'AI ในคอมพร้อม' }).waitFor({ timeout: 6000 });
   switching.setAIAvailable(false);
-  await switching.page.getByRole('heading', { name: 'พูดรับออร์เดอร์แก๊ส rules', exact: true }).waitFor({ timeout: 6000 });
+  await switching.page.locator('.gas-voice-parser-status').filter({ hasText: 'rules' }).waitFor({ timeout: 6000 });
   assert.equal(await switching.page.getByLabel('ข้อความที่พูด · แก้ไขหรือพิมพ์เองได้').inputValue(), 'ข้อความที่กำลังพิมพ์');
   await switching.context.close();
   assert.deepEqual(pageErrors, []);
   assert.deepEqual(writes, []);
-  assert.equal(interpretations.length, 4);
+  assert.equal(interpretations.length, 5);
   console.log('Gas voice browser checks passed: speech events, AI extraction, quota fallback, clarification, cancellation, stock, navigation and iPad layouts. No sale writes.');
 } finally {
   await browser.close();
