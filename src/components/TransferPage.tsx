@@ -2,15 +2,16 @@ import { useRef, useState } from 'react';
 import type { FormEvent } from 'react';
 import axios from 'axios';
 import { baht, bahtInput, dateTime, errorText, operationId, parseMoney, useOperationData } from '../storeOperations';
+import type { CompletionDetails } from './TransactionCompletion';
 import type { Transfer, TransferTotals } from '../storeOperations';
 
 type TransferData = { totals: TransferTotals; records: Transfer[]; defaultFee: number };
-type Props = { api: string; sessionId: string; isOwner: boolean; isShopOpen: boolean; service?: 'TRANSFER' | 'ELECTRICITY' };
+type Props = { api: string; sessionId: string; isOwner: boolean; isShopOpen: boolean; service?: 'TRANSFER' | 'ELECTRICITY'; onComplete?: (notice: CompletionDetails) => void };
 const banks = ['กสิกรไทย', 'ไทยพาณิชย์', 'กรุงไทย', 'กรุงเทพ', 'กรุงศรี', 'ออมสิน', 'ธ.ก.ส.', 'ทหารไทยธนชาต', 'พร้อมเพย์', 'อื่น ๆ'];
 const logos = ['KBANK', 'SCB', 'KTB', 'BBL', 'BAY', 'GSB', 'BAAC', 'TTB', 'PromptPay'];
 const emptyForm = { principal: '', fee: null as string | null, cash: '', bank: '', reference: '', note: '' };
 
-export default function TransferPage({ api, sessionId, isOwner, isShopOpen, service = 'TRANSFER' }: Props) {
+export default function TransferPage({ api, sessionId, isOwner, isShopOpen, service = 'TRANSFER', onComplete }: Props) {
   const electricity = service === 'ELECTRICITY';
   const principalLabel = electricity ? 'ยอดค่าไฟ' : 'ยอดโอน';
   const path = `${api}/api/app-sessions/${encodeURIComponent(sessionId)}/${electricity ? 'electricity' : 'transfers'}`;
@@ -67,6 +68,7 @@ export default function TransferPage({ api, sessionId, isOwner, isShopOpen, serv
       await axios.post(path, { ...body, id: pending.current.id });
       pending.current = null;
       setNotice(`บันทึกแล้ว · ${principalLabel} ${baht(principal)} · ทอน ${baht(difference)}`);
+      onComplete?.({ title: 'ทำรายการสำเร็จ', detail: `${electricity ? 'จ่ายค่าไฟ' : 'รับโอนเงิน'} · ${baht(due!)}`, change: difference / 100 });
       setForm(emptyForm);
       setAmountField('principal'); setReplaceAmount(false);
       setReview(false);

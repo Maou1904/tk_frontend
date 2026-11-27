@@ -20,7 +20,7 @@ const pageErrors = [];
 const interpretations = [];
 const mockGasOrders = [];
 
-async function setup({ unsupported = false, prefixed = false, ai = false, aiBehavior = 'success', allowGasSubmit = false } = {}) {
+async function setup({ unsupported = false, prefixed = false, ai = false, aiBehavior = 'success', gasDelay = 0, allowGasSubmit = false } = {}) {
   let aiAvailable = ai;
   const context = await browser.newContext({ viewport: { width: 1024, height: 768 } });
   await context.addInitScript(({ unsupported, prefixed }) => {
@@ -64,9 +64,11 @@ async function setup({ unsupported = false, prefixed = false, ai = false, aiBeha
       if (aiBehavior === 'quota') return route.fulfill({ status: 429, contentType: 'application/json', headers: { 'access-control-allow-origin': '*' }, body: JSON.stringify({ code: 'VOICE_AI_LIMIT' }) });
       if (aiBehavior === 'delayed') await new Promise(resolve => setTimeout(resolve, 300));
       data = { source: 'local', draft: { brand: 'ปตท', items: [{ sizeKg: 15, quantity: 2 }, { sizeKg: 4, quantity: 1 }], customerName: 'คุณเจเจ', address: 'ดอนภูตา', notes: [], errors: aiBehavior === 'clarify' ? ['กรุณายืนยันจำนวนถัง'] : [] } };
+      if (aiBehavior === 'nobrand') delete data.draft.brand;
+      if (aiBehavior === 'nosize') data.draft.items = [{ quantity: 2 }];
     }
     else if (/\/app-sessions\/[^/]+$/.test(path)) data = { session_id: decodeURIComponent(path.split('/').at(-1)), status: 'OPEN', previousClosedSession: null };
-    else if (path.endsWith('/gas')) data = { items, jobs: [], pendingReturns: [] };
+    else if (path.endsWith('/gas')) { if (gasDelay) await new Promise(resolve => setTimeout(resolve, gasDelay)); data = { items, jobs: [], pendingReturns: [] }; }
     else if (path.endsWith('/cart')) data = { items: [] };
     else if (path === '/api/staff') data = staff;
     else if (path === '/api/store-settings') data = { defaultFee: 1000, gasDeliveryFee: 2000, topupAmount: 10000 };
@@ -221,6 +223,38 @@ try {
   assert.match(await ai.page.locator('.gas-details-panel').innerText(), /15 กก. × 2, ถังแก๊ส 4 กก. × 1/);
   await ai.context.close();
 
+  const loadingInventory = await setup({ gasDelay: 2500 });
+  await applyText(loadingInventory.page, 'ปตทถังใหญ่ 2 ถังให้คุณสมชายที่หลังวัด');
+  await loadingInventory.page.locator('.gas-voice-selection-needed').waitFor();
+  await loadingInventory.page.getByLabel('ชื่อลูกค้า', { exact: true }).fill('แก้ไขระหว่างโหลด');
+  await loadingInventory.page.locator('.gas-voice-selection-needed').waitFor({ state: 'hidden' });
+  assert.match(await loadingInventory.page.locator('.gas-details-panel').innerText(), /15 กก. × 2/);
+  assert.equal(await loadingInventory.page.getByLabel('ชื่อลูกค้า', { exact: true }).inputValue(), 'แก้ไขระหว่างโหลด');
+  await loadingInventory.context.close();
+
+  const noBrand = await setup({ ai: true, aiBehavior: 'nobrand' });
+  await noBrand.page.getByRole('button', { name: 'แตะเพื่อพูด' }).click();
+  await noBrand.page.evaluate(() => window.__emitVoice('ส่งถังใหญ่ 2 ถัง ถังเล็ก 1 ถังให้คุณเจเจที่ดอนภูตา'));
+  await noBrand.page.locator('.gas-voice-selection-needed').waitFor();
+  assert.equal(await noBrand.page.getByLabel('ชื่อลูกค้า', { exact: true }).inputValue(), 'คุณเจเจ');
+  assert.equal(await noBrand.page.getByLabel('ชื่อที่อยู่ / จุดหมายปลายทาง').inputValue(), 'ดอนภูตา');
+  await noBrand.page.getByLabel('ชื่อลูกค้า', { exact: true }).fill('ผู้รับแก้ไข');
+  await noBrand.page.locator('.gas-voice-brand-options').getByRole('button', { name: 'ปตท', exact: true }).click();
+  assert.equal(await noBrand.page.locator('.gas-voice-selection-needed').count(), 0);
+  assert.equal(await noBrand.page.getByLabel('ชื่อลูกค้า', { exact: true }).inputValue(), 'ผู้รับแก้ไข');
+  assert.match(await noBrand.page.locator('.gas-details-panel').innerText(), /15 กก. × 2, ถังแก๊ส 4 กก. × 1/);
+  await noBrand.context.close();
+  const noSize = await setup({ ai: true, aiBehavior: 'nosize' });
+  await applyText(noSize.page, 'ส่งปตทสองถังให้คุณเจเจที่ดอนภูตา');
+  await noSize.page.locator('.gas-voice-selection-needed').waitFor();
+  await noSize.page.getByRole('button', { name: 'เลือกขนาดถัง', exact: true }).click();
+  await noSize.page.locator('.gas-tank-card').filter({ hasText: '15 กก.' }).click();
+  await noSize.page.locator('.gas-details-panel').waitFor();
+  assert.equal(await noSize.page.getByLabel('ชื่อลูกค้า', { exact: true }).inputValue(), 'คุณเจเจ');
+  assert.equal(await noSize.page.getByLabel('ชื่อที่อยู่ / จุดหมายปลายทาง').inputValue(), 'ดอนภูตา');
+  assert.match(await noSize.page.locator('.gas-details-panel').innerText(), /15 กก. × 2/);
+  await noSize.context.close();
+
   const quota = await setup({ ai: true, aiBehavior: 'quota' });
   await applyText(quota.page, 'ส่งปตทถังใหญ่ 1 ถังให้คุณเจเจที่ดอนภูตา');
   await quota.page.getByText('AI ในคอมยังไม่พร้อม ใช้การแยกคำพื้นฐาน', { exact: false }).waitFor();
@@ -301,7 +335,7 @@ try {
   await switching.context.close();
   assert.deepEqual(pageErrors, []);
   assert.deepEqual(writes, []);
-  assert.equal(interpretations.length, 5);
+  assert.equal(interpretations.length, 7);
   console.log('Gas voice browser checks passed: speech events, AI extraction, quota fallback, clarification, cancellation, stock, navigation and iPad layouts. No sale writes.');
 } finally {
   await browser.close();

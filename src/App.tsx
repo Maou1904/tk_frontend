@@ -9,6 +9,8 @@ import { jsPDF } from 'jspdf';
 import { QRCodeSVG } from 'qrcode.react';
 import type { CartItem } from './types';
 import TransferPage from './components/TransferPage';
+import TransactionCompletion from './components/TransactionCompletion';
+import type { CompletionDetails, CompletionNotice } from './components/TransactionCompletion';
 import PurchaseOrders from './components/PurchaseOrders';
 import TaxDashboard from './components/TaxDashboard';
 import StockDocuments from './components/StockDocuments';
@@ -17,9 +19,11 @@ import StoreSettingsPage from './components/StoreSettingsPage';
 import GasVoiceInput from './components/GasVoiceInput';
 import { gasSizeFromName, parseGasVoice, resolveVoiceGasOrder } from './gasVoice';
 import type { GasVoiceDraft } from './gasVoice';
-import { baht, errorText } from './storeOperations';
+import { baht, errorText, operationId } from './storeOperations';
 import type { StoreSettings, TransferTotals, Transfer } from './storeOperations';
-import { summarizeTransfers, analyticsBucket } from './analytics';
+import { summarizeTransfers, buildAnalyticsTrend } from './analytics';
+import AnalyticsTrendChart, { AnalyticsSparkline } from './components/AnalyticsTrendChart';
+import AnalyticsPagination from './components/AnalyticsPagination';
 import { lotteryStockLevel, LOTTERY_PENDING } from './lotteryStock';
 import LotteryStockReset from './components/LotteryStockReset';
 import LotteryCashDialog from './components/LotteryCashDialog';
@@ -1277,6 +1281,7 @@ export default function App() {
   const [lotteryPendingQueue, setLotteryPendingQueue] = useState<SaleRecord[]>([]);
   const [lotteryCashError, setLotteryCashError] = useState('');
   const [lotteryCashTarget, setLotteryCashTarget] = useState<'sale' | SaleRecord | null>(null);
+  const [gasPendingVoiceDraft, setGasPendingVoiceDraft] = useState<GasVoiceDraft | null>(null);
   const [gasBrand, setGasBrand] = useState<GasBrand | ''>('');
   const [posCheckoutOpen, setPosCheckoutOpen] = useState(false);
   const [posAmountField, setPosAmountField] = useState<PosAmountField | null>(null);
@@ -1334,6 +1339,7 @@ export default function App() {
     unit: 'ชิ้น',
   });
 
+  const [gasCatalogLoaded, setGasCatalogLoaded] = useState(false);
   const [gasItems, setGasItems] = useState<GasItem[]>([]);
   const [gasQuantities, setGasQuantities] = useState<Record<string, number>>({});
   const [gasCustomer, setGasCustomer] = useState({ name: '', phone: '', address: '' });
@@ -1379,6 +1385,10 @@ export default function App() {
   const [topupAmountOverride, setTopupAmount] = useState<string | null>(null);
   const topupAmount = topupAmountOverride ?? String((storeSettings?.topupAmount ?? 10000) / 100);
   const [topupOrders, setTopupOrders] = useState<MobileTopupOrder[]>([]);
+  const [completionNotice, setCompletionNotice] = useState<CompletionNotice | null>(null);
+  const showCompletion = useCallback((notice: CompletionDetails) => setCompletionNotice({ ...notice, id: operationId() }), []);
+  const dismissCompletion = useCallback(() => setCompletionNotice(null), []);
+  const [topupSubmitting, setTopupSubmitting] = useState(false);
   const [topupNotice, setTopupNotice] = useState('เลือกค่าย กรอกเบอร์ และจำนวนเงินก่อนยืนยันรายการ');
 
   const [correctionProductId, setCorrectionProductId] = useState('');
@@ -1393,6 +1403,8 @@ export default function App() {
   const [historyFilter, setHistoryFilter] = useState<SaleChannel | 'ALL'>('ALL');
   const [selectedSaleId, setSelectedSaleId] = useState('');
   const [historyNotice, setHistoryNotice] = useState('กดรายการเพื่อดูรายละเอียดทั้งหมด');
+  const [analyticsSalesPage, setAnalyticsSalesPage] = useState(1);
+  const [analyticsSalesPageSize, setAnalyticsSalesPageSize] = useState(20);
   const [analyticsPeriod, setAnalyticsPeriod] = useState<AnalyticsPeriod>('day');
   const [analyticsDate, setAnalyticsDate] = useState(currentDateInput());
   const [analyticsMonth, setAnalyticsMonth] = useState(currentMonthInput());
@@ -1783,6 +1795,7 @@ export default function App() {
   }, [currentView, isMobileViewport]);
 
   function applyGasState(state: GasStateResponse) {
+    setGasCatalogLoaded(true);
     setGasItems(state.items.map(normalizeGasItem));
     setGasJobs(state.jobs.map(normalizeGasJob));
     setPendingGasReturns(state.pendingReturns);
@@ -2137,20 +2150,12 @@ export default function App() {
       .map(([name, summary]) => ({ name, ...summary }))
       .sort((a, b) => b.total - a.total);
   }, [analyticsRevenueSales, transferSummary]);
-  const analyticsTrendRows = useMemo(() => {
-    const buckets = new Map<string, { key: string; label: string; total: number; count: number }>();
-
-    const addToBucket = (date: Date, amount: number) => {
-      const { key, label } = analyticsBucket(date, analyticsPeriod);
-      const current = buckets.get(key) ?? { key, label, total: 0, count: 0 };
-      buckets.set(key, { ...current, total: current.total + amount, count: current.count + 1 });
-    };
-    analyticsRevenueSales.forEach((sale) => addToBucket(sale.createdAt, sale.total));
-    transferSummary.active.forEach((record) => addToBucket(new Date(record.createdAt), record.fee / 100));
-
-    return Array.from(buckets.values()).sort((a, b) => a.key.localeCompare(b.key));
-  }, [analyticsPeriod, analyticsRevenueSales, transferSummary]);
-  const analyticsMaxTrendTotal = Math.max(1, ...analyticsTrendRows.map((row) => row.total));
+  const analyticsTrendRows = useMemo(() => buildAnalyticsTrend(analyticsPeriod,
+    analyticsPeriod === 'day' ? analyticsDate : analyticsPeriod === 'month' ? analyticsMonth : analyticsYear,
+    analyticsRevenueSales, analyticsTransfers), [analyticsPeriod, analyticsDate, analyticsMonth, analyticsYear, analyticsRevenueSales, analyticsTransfers]);
+  const analyticsSalesPageCount = Math.max(1, Math.ceil(analyticsSales.length / analyticsSalesPageSize));
+  const currentAnalyticsSalesPage = Math.min(analyticsSalesPage, analyticsSalesPageCount);
+  const paginatedAnalyticsSales = analyticsSales.slice((currentAnalyticsSalesPage - 1) * analyticsSalesPageSize, currentAnalyticsSalesPage * analyticsSalesPageSize);
   const analyticsRangeLabel = analyticsPeriod === 'day'
     ? analyticsDate
     : analyticsPeriod === 'month'
@@ -3051,6 +3056,7 @@ export default function App() {
       setBillDiscount(0);
       setCashReceived(0);
       closePosCheckout();
+      showCompletion({ title: 'ทำรายการสำเร็จ', detail: `ขายหน้าร้าน · ${formatMoney(saleRecord.total)}`, change: posPayment === 'เงินสด' ? saleRecord.change : 0 });
     } catch (error) {
       console.error(error);
       if (axios.isAxiosError(error) && error.response?.status === 409) {
@@ -3072,16 +3078,19 @@ export default function App() {
     const wantsProduct = draft.brand !== undefined || draft.items.length > 0;
     let selectedOrder: Array<{ item: GasItem; sizeKg: 4 | 15; quantity: number }> = [];
     const brand = draft.brand ?? (gasBrand || undefined);
+    let needsProductSelection = false;
     if (wantsProduct) {
-      if (!brand) return { ok: false, message: 'ระบุยี่ห้อแก๊ส เช่น ปตท. หรือสยาม หรือเลือกยี่ห้อในฟอร์มก่อน · ฟอร์มยังไม่เปลี่ยน' };
       const requested = draft.items.length ? draft.items : [{}];
       const fallbackSize = gasOrderItems.length === 1 ? gasSizeFromName(gasOrderItems[0].name) : undefined;
-      const result = resolveVoiceGasOrder(gasItems, brand, requested, fallbackSize);
-      if (!result.lines) return { ok: false, message: `${result.error} · ฟอร์มยังไม่เปลี่ยน` };
-      selectedOrder = result.lines;
-      summary.push(...selectedOrder.map((line) => `${brand} ${line.sizeKg} กก. × ${line.quantity} ถัง`));
-      if (requested.some((line) => line.quantity === undefined)) notes.push(requested.length > 1 ? 'ไม่ได้บอกจำนวนบางขนาด ใช้ขนาดละ 1 ถัง' : 'ไม่ได้บอกจำนวน ใช้ 1 ถัง');
-    }
+      needsProductSelection = !gasCatalogLoaded || !brand || requested.some(line => !line.sizeKg && !fallbackSize);
+      if (!needsProductSelection && brand) {
+        const result = resolveVoiceGasOrder(gasItems, brand, requested, fallbackSize);
+        if (!result.lines) return { ok: false, message: `${result.error} · ฟอร์มยังไม่เปลี่ยน` };
+        selectedOrder = result.lines;
+        summary.push(...selectedOrder.map((line) => `${brand} ${line.sizeKg} กก. × ${line.quantity} ถัง`));
+        if (requested.some((line) => line.quantity === undefined)) notes.push(requested.length > 1 ? 'ไม่ได้บอกจำนวนบางขนาด ใช้ขนาดละ 1 ถัง' : 'ไม่ได้บอกจำนวน ใช้ 1 ถัง');
+      }
+    } else if (!gasSelectedCount) needsProductSelection = true;
 
     const changesCustomer = wantsProduct || (draft.customerName !== undefined && draft.customerName !== gasCustomer.name)
       || (draft.address !== undefined && draft.address !== gasCustomer.address);
@@ -3097,17 +3106,39 @@ export default function App() {
       setGasReturnedTankQuantity(0);
     }
     setGasCustomer(customer);
+    setGasPendingVoiceDraft(needsProductSelection ? draft : null);
+    if (needsProductSelection && brand && brand !== gasBrand) {
+      setGasBrand(brand); setGasQuantities({}); setGasReturnedTankQuantity(0);
+    }
     if (draft.customerName) summary.push(draft.customerName);
     if (draft.address) summary.push(`ส่งที่ ${draft.address}`);
     if (draft.phone) summary.push(`โทร ${draft.phone}`);
     if (!customer.name) notes.push('ยังขาดชื่อลูกค้า');
     if (!customer.address) notes.push('ยังขาดจุดส่ง');
-    if (selectedOrder.length || gasSelectedCount > 0) setGasStep('delivery');
-    else notes.push('เลือกยี่ห้อและขนาดถังต่อในฟอร์ม');
+    setGasStep('delivery');
+    if (needsProductSelection) notes.push('เก็บข้อมูลที่พูดไว้แล้ว เลือกยี่ห้อหรือขนาดถังที่ยังขาดต่อได้');
     return { ok: true, message: `กรอกให้แล้ว: ${summary.join(' · ')}${notes.length ? ` · ${notes.join(' · ')}` : ''} · ตรวจข้อมูลและคนส่งก่อนกดทำรายการ` };
   }
 
+  // Speech may finish before the first inventory request. Complete only the product
+  // selection when it arrives; customer edits made while waiting must stay intact.
+  useEffect(() => {
+    if (!gasCatalogLoaded || !gasPendingVoiceDraft?.brand || !gasPendingVoiceDraft.items.length || gasPendingVoiceDraft.items.some(line => !line.sizeKg)) return;
+    const result = resolveVoiceGasOrder(gasItems, gasPendingVoiceDraft.brand, gasPendingVoiceDraft.items);
+    if (!result.lines) { setGasNotice(result.error ?? 'เลือกถังแก๊สอีกครั้ง'); return; }
+    setGasBrand(gasPendingVoiceDraft.brand);
+    setGasQuantities(Object.fromEntries(result.lines.map(line => [line.item.id, line.quantity])));
+    setGasReturnedTankQuantity(0);
+    setGasPendingVoiceDraft(null);
+    setGasStep('delivery');
+  }, [gasCatalogLoaded, gasItems, gasPendingVoiceDraft]);
+
   function selectGasBrand(brand: GasBrand) {
+    if (gasPendingVoiceDraft) {
+      const result = applyGasVoice('', { ...gasPendingVoiceDraft, brand, customerName: gasCustomer.name, address: gasCustomer.address, phone: gasCustomer.phone });
+      if (!result.ok) setGasNotice(result.message);
+      return;
+    }
     if (brand === gasBrand) return;
     setGasBrand(brand);
     setGasQuantities({});
@@ -3117,10 +3148,20 @@ export default function App() {
 
   function updateGasQuantity(id: string, delta: number) {
     const gasItem = gasItems.find((item) => item.id === id);
-    if (!gasItem || gasItem.brand !== gasBrand) {
+    if (!gasItem || !gasItem.brand || gasItem.brand !== gasBrand) {
       return;
     }
 
+    if (delta > 0 && gasPendingVoiceDraft && gasPendingVoiceDraft.items.length <= 1 && !gasPendingVoiceDraft.items[0]?.sizeKg) {
+      const sizeKg = gasSizeFromName(gasItem.name);
+      if (sizeKg) {
+        const result = applyGasVoice('', { ...gasPendingVoiceDraft, brand: gasItem.brand,
+          items: [{ ...gasPendingVoiceDraft.items[0], sizeKg }], customerName: gasCustomer.name, address: gasCustomer.address, phone: gasCustomer.phone });
+        if (!result.ok) setGasNotice(result.message);
+        return;
+      }
+    }
+    setGasPendingVoiceDraft(null);
     setGasQuantities((previous) => ({
       ...previous,
       [id]: Math.max(0, Math.min(gasItem.stock, (previous[id] ?? 0) + delta)),
@@ -3203,6 +3244,7 @@ export default function App() {
       setSalesHistory((previous) => [saleRecord, ...previous.filter((sale) => sale.id !== saleRecord.id)]);
       setSelectedSaleId(saleRecord.id);
       setGasStep('selection');
+      setGasPendingVoiceDraft(null);
       setGasBrand('');
       setGasQuantities({});
       setGasCustomer({ name: '', phone: '', address: '' });
@@ -3212,6 +3254,7 @@ export default function App() {
       setGasPaid(isOwner);
       setGasDistantDelivery(false);
       setGasNotice(`สร้างงาน ${saleRecord.id} แล้ว`);
+      showCompletion({ title: 'บันทึกงานแก๊สแล้ว', detail: `${saleRecord.customerName} · ${formatMoney(saleRecord.total)}` });
     } catch (error) {
       if (axios.isAxiosError(error) && error.response?.status === 409) {
         setGasNotice('ทำรายการแก๊สไม่สำเร็จ เพราะสต็อกถังไม่พอ');
@@ -3236,6 +3279,7 @@ export default function App() {
       applyGasState(response.data);
       const updatedJob = response.data.jobs.find((job) => job.id === id);
       const updatedStatus = updatedJob?.status ?? 'กำลังดำเนินการ';
+      showCompletion({ title: updatedStatus === 'เสร็จแล้ว' ? 'ปิดงานแก๊สแล้ว' : 'บันทึกการจ่ายแล้ว', detail: id });
       setSalesHistory((previous) =>
         previous.map((sale) =>
           sale.id === id
@@ -3508,6 +3552,9 @@ export default function App() {
       setSelectedSaleId(completedSale.id);
       setLotteryCart(response.data.cart.items.map(normalizeCartItem));
       await refreshLotteryTickets();
+      showCompletion(completedSale.status === LOTTERY_PENDING
+        ? { title: 'ส่งรายการแล้ว', detail: 'รอเจ้าของร้านตรวจรับเงินสลาก' }
+        : { title: 'ทำรายการสำเร็จ', detail: `สลาก · ${formatMoney(completedSale.total)}`, change: lotteryPayment === 'เงินสด' ? completedSale.change : 0 });
       if (completedSale.status === LOTTERY_PENDING) setLotteryPendingQueue(previous => [completedSale, ...previous.filter(sale => sale.id !== completedSale.id)]);
       setLotteryNotice(completedSale.status === LOTTERY_PENDING ? 'ส่งรายการให้เจ้าของร้านตรวจและยืนยันแล้ว สต็อกหวยถูกกันไว้สำหรับรายการนี้' : `ขายหวยสำเร็จ ${formatMoney(lotterySubtotal)}`);
       setLotteryReceived(0);
@@ -3530,6 +3577,7 @@ export default function App() {
       setLotteryPendingQueue(previous => previous.filter(row => row.id !== sale.id));
       setLotteryNotice(`ยืนยันรับเงินรายการ ${sale.id} แล้ว`);
       setLotteryCashTarget(null);
+      showCompletion({ title: 'ยืนยันรับเงินสำเร็จ', detail: `สลาก · ${formatMoney(sale.total)}`, change: sale.paymentMethod === 'เงินสด' ? Math.max(0, cashReceived - sale.total) : 0 });
     } catch (error) { setLotteryNotice(errorText(error)); setLotteryCashError(errorText(error)); }
     finally { setLotteryApprovalBusy(''); }
   }
@@ -3543,6 +3591,7 @@ export default function App() {
   }
 
   async function confirmTopupOrder() {
+    if (topupSubmitting) return;
     if (!requireShopOpen(setTopupNotice)) {
       return;
     }
@@ -3560,6 +3609,7 @@ export default function App() {
       return;
     }
 
+    setTopupSubmitting(true);
     try {
       const response = await axios.post<MobileTopupOrder>(
         `${API_BASE_URL}/api/app-sessions/${encodeURIComponent(scanSessionId)}/topups`,
@@ -3570,9 +3620,10 @@ export default function App() {
       setTopupPhone('');
       setTopupAmount(null);
       setTopupNotice(`เพิ่มรายการ ${topupProvider} ${phone} ${formatMoney(amount)} แล้ว`);
+      showCompletion({ title: 'บันทึกรายการเติมเงินแล้ว', detail: `${topupProvider} · ${phone} · ${formatMoney(amount)}` });
     } catch {
       setTopupNotice('เพิ่มรายการเติมเงินลง tingkum_db ไม่สำเร็จ');
-    }
+    } finally { setTopupSubmitting(false); }
   }
 
   async function toggleTopupOrderStatus(id: string, field: 'toppedUp' | 'paid') {
@@ -3593,6 +3644,7 @@ export default function App() {
       );
       const updated = normalizeTopupOrder(response.data);
       setTopupOrders((previous) => previous.map((item) => item.id === id ? updated : item));
+      if (updated[field]) showCompletion({ title: field === 'paid' ? 'ยืนยันรับเงินแล้ว' : 'ยืนยันเติมเงินแล้ว', detail: `${updated.provider} · ${updated.phone}` });
     } catch {
       setTopupNotice('เปลี่ยนสถานะเติมเงินไม่สำเร็จ');
     }
@@ -4607,6 +4659,14 @@ export default function App() {
         {gasStep === 'delivery' && <section className="panel gas-details-panel">
           <button className="secondary-action" onClick={() => setGasStep('selection')}>ย้อนกลับ · แก้ไขถัง</button>
           <PanelTitle icon="pin_drop" title="รายละเอียดการส่ง" detail={gasBrand + ' · ' + gasOrderItems.map(item => item.name + ' × ' + item.quantity).join(', ')} />
+          {gasPendingVoiceDraft && <div className="gas-voice-selection-needed" role="status">
+            <strong>เก็บข้อมูลจากเสียงไว้แล้ว</strong>
+            <p>{gasPendingVoiceDraft.items.map(line => `${line.sizeKg ? line.sizeKg + ' กก.' : 'ยังไม่ระบุขนาด'} × ${line.quantity ?? 1} ถัง`).join(' · ') || 'เลือกถังแก๊สสำหรับรายการนี้'}</p>
+            <p>เลือกส่วนที่ยังขาดได้ โดยชื่อ ที่อยู่ และเบอร์โทรจะยังอยู่</p>
+            <div className="touch-options gas-voice-brand-options">{GAS_BRANDS.map(brand => <button type="button" key={brand} aria-pressed={gasBrand === brand} onClick={() => selectGasBrand(brand)}>{brand}</button>)}</div>
+            <button type="button" className="secondary-action" onClick={() => setGasStep('selection')}>เลือกขนาดถัง</button>
+          </div>}
+
           <div className="form-stack">
             <label className="field">
               <span>ชื่อที่อยู่ / จุดหมายปลายทาง</span>
@@ -4912,41 +4972,21 @@ export default function App() {
         {topupTab === 'entry' ? <section className="panel topup-entry-panel">
           <PanelTitle icon="phone_iphone" title="เติมเงินมือถือ" detail={topupNotice} />
 
+          <fieldset className="topup-entry-columns" disabled={topupSubmitting}>
+            <div className="topup-entry-choices" aria-label="เลือกค่ายและยอดเติมเงิน">
           <div className="topup-provider-grid" aria-label="เลือกผู้ให้บริการ">
             {topupProviders.map((provider) => (
               <button
                 type="button"
                 key={provider}
                 className={topupProvider === provider ? 'active' : ''}
+                aria-pressed={topupProvider === provider}
                 onClick={() => setTopupProvider(provider)}
               >
                 <img className={'carrier-logo carrier-'+provider} src={'/brands/'+provider+(provider === 'DTAC' ? '.png' : '.svg')} alt="" />
                 {provider}
               </button>
             ))}
-          </div>
-
-          <label className="field">
-            <span>เบอร์มือถือ</span>
-            <input
-              value={topupPhone}
-              inputMode="numeric"
-              maxLength={10}
-              onChange={(event) => setTopupPhone(event.target.value.replace(/\D/g, '').slice(0, 10))}
-              onKeyDown={(event) => event.key === 'Enter' && confirmTopupOrder()}
-              placeholder="08xxxxxxxx"
-            />
-          </label>
-
-          <div className="topup-keypad">
-            {topupKeypad.map((digit) => (
-              <button type="button" key={digit} onClick={() => appendTopupPhoneDigit(digit)}>
-                {digit}
-              </button>
-            ))}
-            <button type="button" className="danger" onClick={deleteTopupPhoneDigit}>
-              ลบ
-            </button>
           </div>
 
           <div className="topup-amount-block">
@@ -4957,6 +4997,7 @@ export default function App() {
                   type="button"
                   key={amount}
                   className={Number(topupAmount) === amount ? 'active' : ''}
+                  aria-pressed={Number(topupAmount) === amount}
                   onClick={() => setTopupAmount(String(amount))}
                 >
                   {amount}
@@ -4976,8 +5017,37 @@ export default function App() {
           </div>
 
           <button className="primary-action" type="button" onClick={confirmTopupOrder}>
-            <Icon name="check_circle" /> ยืนยันรายการ
+            <Icon name="check_circle" /> {topupSubmitting ? 'กำลังบันทึก…' : 'ยืนยันรายการ'}
           </button>
+            </div>
+            <div className="topup-entry-number" aria-label="เบอร์มือถือและแป้นตัวเลข">
+          <label className="field">
+            <span>เบอร์มือถือ</span>
+            <input
+              value={topupPhone}
+              inputMode="numeric"
+              maxLength={10}
+              onChange={(event) => setTopupPhone(event.target.value.replace(/\D/g, '').slice(0, 10))}
+              onKeyDown={(event) => event.key === 'Enter' && confirmTopupOrder()}
+              placeholder="08xxxxxxxx"
+            />
+          </label>
+
+          <div className="topup-keypad">
+            {topupKeypad.filter(digit => digit !== '0').map((digit) => (
+              <button type="button" key={digit} onClick={() => appendTopupPhoneDigit(digit)}>
+                {digit}
+              </button>
+            ))}
+            <button type="button" onClick={() => setTopupPhone('')}>ล้าง</button>
+            <button type="button" onClick={() => appendTopupPhoneDigit('0')}>0</button>
+            <button type="button" className="danger" onClick={deleteTopupPhoneDigit}>
+              ลบ
+            </button>
+          </div>
+
+            </div>
+          </fieldset>
         </section> : <section className="panel topup-orders-panel">
           <PanelTitle icon="list_alt" title="รายการเบอร์" detail={`${topupOrders.length} รายการ | รอเติม ${pendingTopupCount} | รอจ่าย ${unpaidTopupCount}`} />
           <div className="topup-summary-grid">
@@ -5249,26 +5319,26 @@ export default function App() {
           </div>
           <div className="analytics-controls">
             <div className="segmented analytics-period-tabs">
-              <button type="button" className={analyticsPeriod === 'day' ? 'active' : ''} onClick={() => setAnalyticsPeriod('day')}>รายวัน</button>
-              <button type="button" className={analyticsPeriod === 'month' ? 'active' : ''} onClick={() => setAnalyticsPeriod('month')}>รายเดือน</button>
-              <button type="button" className={analyticsPeriod === 'year' ? 'active' : ''} onClick={() => setAnalyticsPeriod('year')}>รายปี</button>
+              <button type="button" className={analyticsPeriod === 'day' ? 'active' : ''} onClick={() => { setAnalyticsPeriod('day'); setAnalyticsSalesPage(1); }}>รายวัน</button>
+              <button type="button" className={analyticsPeriod === 'month' ? 'active' : ''} onClick={() => { setAnalyticsPeriod('month'); setAnalyticsSalesPage(1); }}>รายเดือน</button>
+              <button type="button" className={analyticsPeriod === 'year' ? 'active' : ''} onClick={() => { setAnalyticsPeriod('year'); setAnalyticsSalesPage(1); }}>รายปี</button>
             </div>
             {analyticsPeriod === 'day' && (
               <label className="field compact">
                 <span>วันที่</span>
-                <input type="date" value={analyticsDate} onChange={(event) => setAnalyticsDate(event.target.value)} />
+                <input type="date" value={analyticsDate} onChange={(event) => { setAnalyticsDate(event.target.value); setAnalyticsSalesPage(1); }} />
               </label>
             )}
             {analyticsPeriod === 'month' && (
               <label className="field compact">
                 <span>เดือน</span>
-                <input type="month" value={analyticsMonth} onChange={(event) => setAnalyticsMonth(event.target.value)} />
+                <input type="month" value={analyticsMonth} onChange={(event) => { setAnalyticsMonth(event.target.value); setAnalyticsSalesPage(1); }} />
               </label>
             )}
             {analyticsPeriod === 'year' && (
               <label className="field compact">
                 <span>ปี</span>
-                <input type="number" min="2020" max="2100" value={analyticsYear} onChange={(event) => setAnalyticsYear(event.target.value)} />
+                <input type="number" min="2020" max="2100" value={analyticsYear} onChange={(event) => { setAnalyticsYear(event.target.value); setAnalyticsSalesPage(1); }} />
               </label>
             )}
             <button className="primary-action" type="button" onClick={downloadAnalyticsExcel} disabled={isAnalyticsLoading}>
@@ -5316,14 +5386,18 @@ export default function App() {
                 </span>
                 <strong>{formatMoney(summary.total)}</strong>
                 <small>{summary.count} บิล</small>
+                <AnalyticsSparkline rows={analyticsTrendRows} series={channel} />
               </div>
             );
           })}
-          <div className="analytics-channel-card analytics-transfer-channel">
-            <span className="sale-channel transfer"><Icon name="currency_exchange" /> รับโอนเงิน</span>
-            <strong>{baht(transferSummary.fee)}</strong>
-            <small>ค่าบริการ · {transferSummary.count} รายการสำเร็จ</small>
-          </div>
+          {(['TRANSFER', 'ELECTRICITY'] as const).map(service => {
+            const summary = summarizeTransfers(analyticsTransfers.filter(row => (row.serviceType ?? 'TRANSFER') === service));
+            return <div className="analytics-channel-card analytics-transfer-channel" key={service}>
+              <span className="sale-channel transfer"><Icon name={service === 'ELECTRICITY' ? 'bolt' : 'currency_exchange'} /> {service === 'ELECTRICITY' ? 'จ่ายค่าไฟ' : 'รับโอนเงิน'}</span>
+              <strong>{baht(summary.fee)}</strong><small>ค่าบริการ · {summary.count} รายการสำเร็จ</small>
+              <AnalyticsSparkline rows={analyticsTrendRows} series={service} />
+            </div>;
+          })}
         </section>
 
         <section className="panel analytics-transfer-summary" aria-label="สรุปบริการรับโอนเงิน">
@@ -5337,22 +5411,11 @@ export default function App() {
           <p className="analytics-transfer-note">เงินสดรับ {baht(transferSummary.cashReceived)} · เงินทอน {baht(transferSummary.change)} · ยกเลิก {transferSummary.cancelled} รายการ</p>
         </section>
 
-        <section className="analytics-dashboard-grid">
-          <section className="panel">
-            <PanelTitle icon="show_chart" title={`ยอดขายและค่าบริการตาม${analyticsPeriod === 'day' ? 'ชั่วโมง' : analyticsPeriod === 'month' ? 'วัน' : 'เดือน'}`} detail={analyticsRange.startDate ? `${analyticsRange.startDate} ถึง ${analyticsRange.endDate}` : undefined} />
-            <div className="bar-list analytics-trend-list">
-              {analyticsTrendRows.length === 0 ? (
-                <EmptyState text="ยังไม่มีรายการขายในช่วงนี้" />
-              ) : analyticsTrendRows.map((row) => (
-                <div key={row.key}>
-                  <span>{row.label}</span>
-                  <div><i style={{ width: `${Math.max(4, Math.round((row.total / analyticsMaxTrendTotal) * 100))}%` }}></i></div>
-                  <b>{formatMoney(row.total)}</b>
-                </div>
-              ))}
-            </div>
-          </section>
-
+        <section className="panel analytics-time-panel">
+          <PanelTitle icon="show_chart" title={`กราฟยอดขายตาม${analyticsPeriod === 'day' ? 'ชั่วโมง' : analyticsPeriod === 'month' ? 'วัน' : 'เดือน'}`} detail={`${periodLabel} ${analyticsRangeLabel}`} />
+          <AnalyticsTrendChart key={analyticsQuery} rows={analyticsTrendRows} period={analyticsPeriod} loading={isAnalyticsLoading} />
+        </section>
+        <section className="analytics-dashboard-grid analytics-category-grid">
           <section className="panel">
             <PanelTitle icon="bar_chart" title="ยอดตามหมวดและบริการ" />
             <div className="bar-list">
@@ -5438,8 +5501,8 @@ export default function App() {
           </div>
         </section>
 
-        <section className="panel analytics-sales-panel">
-          <PanelTitle icon="receipt_long" title="ทุกรายการขาย" detail={`${analyticsSales.length} รายการ | ${periodLabel} ${analyticsRangeLabel}`} />
+        <section className="panel analytics-sales-panel" id="analytics-sales">
+          <PanelTitle icon="receipt_long" title="ทุกรายการขาย" detail={`${analyticsSales.length} รายการ | ${periodLabel} ${analyticsRangeLabel} | หน้า ${currentAnalyticsSalesPage}/${analyticsSalesPageCount}`} />
           <div className="analytics-sales-table">
             {analyticsSales.length === 0 ? (
               <EmptyState text="ยังไม่มีรายการขายในช่วงนี้" />
@@ -5458,7 +5521,7 @@ export default function App() {
                   </tr>
                 </thead>
                 <tbody>
-                  {analyticsSales.map((sale) => (
+                  {paginatedAnalyticsSales.map((sale) => (
                     <tr key={sale.id}>
                       <td>{formatReceiptDateTime(sale.createdAt)}</td>
                       <td>
@@ -5486,6 +5549,11 @@ export default function App() {
               </table>
             )}
           </div>
+          <AnalyticsPagination page={currentAnalyticsSalesPage} pageCount={analyticsSalesPageCount} total={analyticsSales.length} pageSize={analyticsSalesPageSize}
+            onPageChange={page => {
+              setAnalyticsSalesPage(page);
+              requestAnimationFrame(() => document.getElementById('analytics-sales')?.scrollIntoView({ block: 'start' }));
+            }} onPageSizeChange={size => { setAnalyticsSalesPageSize(size); setAnalyticsSalesPage(1); }} />
         </section>
       </div>
     );
@@ -6528,9 +6596,9 @@ export default function App() {
       case 'TOPUP':
         return renderTopupPage();
       case 'ELECTRICITY':
-        return <TransferPage key={`electricity-${scanSessionId}`} service="ELECTRICITY" api={API_BASE_URL} sessionId={scanSessionId} isOwner={isOwner} isShopOpen={isShopOpen} />;
+        return <TransferPage key={`electricity-${scanSessionId}`} service="ELECTRICITY" api={API_BASE_URL} sessionId={scanSessionId} isOwner={isOwner} isShopOpen={isShopOpen} onComplete={showCompletion} />;
       case 'TRANSFER':
-        return <TransferPage key={scanSessionId} api={API_BASE_URL} sessionId={scanSessionId} isOwner={isOwner} isShopOpen={isShopOpen} />;
+        return <TransferPage key={scanSessionId} api={API_BASE_URL} sessionId={scanSessionId} isOwner={isOwner} isShopOpen={isShopOpen} onComplete={showCompletion} />;
       case 'HISTORY':
         return renderHistoryPage();
       case 'ANALYTICS':
@@ -6650,6 +6718,7 @@ export default function App() {
           </main>
         </div>
       </div>
+      {completionNotice && <TransactionCompletion key={completionNotice.id} notice={completionNotice} onDismiss={dismissCompletion} />}
       {renderPasswordPanel()}
       {renderProductRegistrationRequestPanel()}
       {isOwner && productEdit && <dialog className="product-details-dialog" aria-labelledby="product-details-title" ref={(dialog) => {

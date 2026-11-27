@@ -115,6 +115,8 @@ try {
   await staff.page.getByText('LOTTERY-QA-PENDING', { exact: true }).waitFor();
   assert.equal(await staff.page.getByRole('button', { name: 'ยืนยันว่ารับเงินจริงแล้ว', exact: true }).count(), 0);
   assert.equal(staff.writes.filter(write => write.path.endsWith('/lottery/checkout')).length, 1);
+  await staff.page.locator('.transaction-completion').getByText('ส่งรายการแล้ว', {exact:true}).waitFor();
+  assert.equal(await staff.page.locator('.transaction-completion-change').count(), 0);
   if (artifactDir) await staff.page.screenshot({ path: `${artifactDir}/lottery-user.png`, fullPage: true });
   await staff.context.close();
   const owner = await setup('owner');
@@ -134,6 +136,8 @@ try {
   await approveCash.click();
   await owner.page.getByText('ไม่มีรายการรอยืนยัน', { exact: true }).waitFor();
   assert.equal(owner.writes.find(write => write.path.endsWith('/confirm')).body.cashReceived, 100);
+  await owner.page.locator('.transaction-completion-change').getByText('฿20.00', {exact:true}).waitFor();
+  await owner.page.getByRole('button', {name:'ปิดข้อความสำเร็จ',exact:true}).click();
   assert(owner.writes.find(write => write.path.endsWith('/confirm')).path.includes('/TK-20261125/'));
   assert.equal(await owner.page.getByRole('button', { name: 'เคลียร์สต็อกงวดเดิม', exact: true }).count(), 0);
   await owner.page.getByRole('navigation', { name: 'เมนูหลัก' }).getByRole('button', { name: 'สต็อก', exact: true }).click();
@@ -182,6 +186,7 @@ try {
   await saveElectricity.click();
   await owner.page.getByRole('alert').filter({ hasText: 'ทดสอบบันทึกไม่สำเร็จ' }).waitFor();
   assert.equal(await owner.page.getByLabel('เงินสดที่รับจริง (บาท)').inputValue(), '200');
+  assert.equal(await owner.page.locator('.transaction-completion').count(), 0);
   await saveElectricity.click();
   await owner.page.getByText(/บันทึกแล้ว · ยอดค่าไฟ/).waitFor();
   const electricityWrites = owner.writes.filter(write => write.path.endsWith('/electricity'));
