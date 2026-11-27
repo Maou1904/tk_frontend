@@ -1,0 +1,186 @@
+/* Shared counter theme, based on the approved iPad top-up screen. */
+:root {
+  --color-background: #f4f7f5;
+  --color-text: #173f36;
+  --color-surface: #ffffff;
+  --color-surface-soft: #edf4f1;
+  --color-surface-strong: #dcebe6;
+  --color-primary: #246256;
+  --color-primary-dark: #173f36;
+  --color-primary-darker: #103b31;
+  --color-primary-soft: #d4ebe4;
+  --color-border-soft: #b5cec5;
+  --color-border-surface: #d0e0d9;
+  --color-muted: #53675e;
+  --color-shadow: rgba(23, 63, 54, .07);
+  --control-border: #9ab7b0;
+  --control-shadow: #a8c4ba;
+  --control-pressed: #cce4dc;
+}
+
+.panel,
+.metric-card,
+.analytics-channel-card {
+  border-color: var(--color-border-surface);
+  border-radius: 12px;
+  background: var(--color-surface);
+  box-shadow: 0 2px 8px var(--color-shadow);
+}
+
+.primary-action {
+  min-height: 54px;
+  border: 2px solid var(--color-primary);
+  border-radius: 10px;
+  background: var(--color-primary);
+  color: white;
+  font-weight: 750;
+}
+.secondary-action,
+.shop-wizard footer button:not(.primary-action),
+.cash-buttons button,
+.segmented button,
+.status-button,
+.touch-options button,
+.manage-tools button,
+.workspace-switcher button,
+.gas-tabs button {
+  min-height: 48px;
+  border: 2px solid var(--control-border);
+  border-radius: 10px;
+  background: white;
+  color: var(--color-primary-dark);
+  font-weight: 650;
+}
+
+.segmented button.active,
+.status-button.active,
+.touch-options button[aria-pressed=true],
+.manage-tools button[aria-current=page],
+.workspace-switcher button[aria-pressed=true],
+.gas-tabs button[aria-selected=true] {
+  border-color: var(--color-primary);
+  background: var(--color-primary);
+  color: white;
+  box-shadow: none;
+}
+
+.workspace-switcher,
+.gas-tabs,
+.manage-tools {
+  padding: 8px;
+  gap: 8px;
+  border: 1px solid var(--color-border-surface);
+  border-radius: 12px;
+  background: var(--color-surface-soft);
+}
+.gas-brands button[aria-pressed=true],
+.bank-options button[aria-pressed=true] {
+  border-color: var(--color-primary);
+  background: var(--color-primary-soft);
+  color: var(--color-primary-dark);
+  box-shadow: inset 0 0 0 1px var(--color-primary);
+}
+.gas-tank-card {
+  border: 2px solid var(--control-border);
+  border-radius: 14px;
+  background: white;
+}
+.gas-tank-card.selected {
+  border-color: var(--color-primary);
+  background: #edf8f2;
+  box-shadow: inset 0 0 0 1px var(--color-primary);
+}
+
+.counter-keys,
+.number-pad,
+.pos-number-keys {
+  padding: 12px;
+  border: 1px solid var(--control-border);
+  border-radius: 14px;
+  background: var(--color-surface-strong);
+}
+.counter-keys button,
+.shop-wizard .number-pad button,
+.pos-number-keys button {
+  min-height: 60px;
+  border: 2px solid #83a79c;
+  border-radius: 10px;
+  background: white;
+  box-shadow: 0 2px 0 var(--control-shadow);
+  color: var(--color-primary-dark);
+  font-size: 1.65rem;
+  font-weight: 750;
+}
+.counter-keys button:active,
+.shop-wizard .number-pad button:active,
+.pos-number-keys button:active {
+  background: var(--control-pressed);
+  box-shadow: none;
+}
+.lottery-cash-shortcuts button,
+.pos-denominations button,
+.shop-wizard .money-fields > button {
+  min-height: 48px;
+  border: 2px solid var(--control-border);
+  border-radius: 10px;
+  background: white;
+  color: var(--color-primary-dark);
+}
+.shop-wizard .money-fields > button[aria-pressed=true] {
+  border-color: var(--color-primary);
+  background: var(--color-primary-soft);
+  color: var(--color-primary-dark);
+}
+.stepper { border-color: var(--control-border); }
+.stepper button { background: white; color: var(--color-primary-dark); }
+
+.field input:not([type=checkbox]):not([type=radio]),
+.field select,
+.field textarea {
+  min-height: 48px;
+  border-color: var(--control-border);
+  border-radius: 10px;
+}
+.field input:focus,
+.field select:focus,
+.field textarea:focus {
+  outline: 3px solid var(--color-primary-soft);
+  border-color: var(--color-primary);
+}
+button:focus-visible,
+[role=button]:focus-visible,
+.analytics-line-chart:focus-visible {
+  outline: 3px solid var(--color-primary);
+  outline-offset: 3px;
+}
+.nav-item.selected {
+  border-color: #b4d2c5;
+  background: #dfeee7;
+  color: var(--color-primary-dark);
+}
+.pos-cart-trigger { background: var(--color-primary); }
+.fee-ticket { background: var(--color-primary-soft); color: var(--color-primary-dark); }
+.operation-settings-grid .field { background: #f3f8f5; border-color: var(--color-border-soft); }
+.operation-table th { background: var(--color-surface-soft); }
+.text-action { color: var(--color-primary-dark); }
+
+/* Keep destructive actions and stock-level colors distinct from ordinary controls. */
+.secondary-action.danger,
+.link-button.danger,
+.danger-action {
+  border-color: #d9a19a;
+  background: #fff0ee;
+  color: #a52a25;
+}
+button:disabled { opacity: .5; }
+@media (hover:hover) {
+  .secondary-action:not(.danger):not(:disabled):hover,
+  .cash-buttons button:not(:disabled):hover,
+  .counter-keys button:not(:disabled):hover,
+  .shop-wizard .number-pad button:not(:disabled):hover { background: var(--control-pressed); }
+  .primary-action:not(:disabled):hover { background: var(--color-primary-dark); border-color: var(--color-primary-dark); }
+}
+@media(max-height:700px) { .lottery-cash-dialog .counter-keys button { min-height: 44px; } }
+
+.gas-status-toggle.active i { background: var(--color-primary); }
+.topup-switch.active { border-color: var(--color-primary); background: var(--color-primary-soft); color: var(--color-primary-dark); }

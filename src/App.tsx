@@ -29,6 +29,7 @@ import LotteryStockReset from './components/LotteryStockReset';
 import LotteryCashDialog from './components/LotteryCashDialog';
 import './App.css';
 import './operations.css';
+import './shop-theme.css';
 
 type View = 'POS' | 'GAS' | 'LOTTERY' | 'TOPUP' | 'ELECTRICITY' | 'TRANSFER' | 'HISTORY' | 'ANALYTICS' | 'STOCK' | 'STAFF' | 'SETTINGS' | 'CLOSING';
 type PaymentMethod = 'เงินสด' | 'PromptPay';
