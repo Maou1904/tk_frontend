@@ -1,5 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import type { KeyboardEvent } from 'react';
+import ActionKeypad from './ActionKeypad';
+import CashShortcuts from './CashShortcuts';
 import { baht, bahtInput, parseMoney } from '../storeOperations';
 
 type Props = {
@@ -49,18 +51,11 @@ export default function LotteryCashDialog({ total, value, approval, busy, error,
       <form onSubmit={event => { event.preventDefault(); if (!busy && cash !== null && cash >= due) void onConfirm(cash / 100); }}>
         <fieldset disabled={busy} className="operation-fields">
           <label className="field"><span>เงินที่รับจริง (บาท)</span><input ref={input} inputMode="decimal" value={amount} placeholder="0.00" onFocus={() => setReplace(true)} onChange={event => { if (/^\d{0,9}(?:\.\d{0,2})?$/.test(event.target.value)) { setAmount(event.target.value); setReplace(false); } }} /></label>
-          <div className="lottery-cash-shortcuts" aria-label="ยอดเงินลัด">
-            <button type="button" onClick={() => shortcut(due)}>พอดี</button>
-            {[100, 200, 500, 1000].map(value => <button type="button" key={value} onClick={() => shortcut(value * 100)}>{value.toLocaleString('th-TH')}</button>)}
-          </div>
-          <div className="counter-keys" aria-label="แป้นตัวเลขรับเงิน">
-            {['1','2','3','4','5','6','7','8','9','.','0','ลบ'].map(key => <button type="button" key={key} onClick={() => enter(key)}>{key}</button>)}
-          </div>
+          <CashShortcuts due={due} value={cash} disabled={busy} showUnit={false} onSelect={shortcut} />
+          <ActionKeypad className="counter-keys" label="แป้นตัวเลขรับเงิน" disabled={busy} actionLabel={busy ? 'กำลังยืนยัน…' : 'ยืนยัน'} actionName={approval ? 'ยืนยันว่ารับเงินจริงแล้ว' : 'ยืนยันยอดรับเงิน'} actionDisabled={cash === null || cash < due} onDigit={enter} onDelete={() => enter('ลบ')} onClear={() => enter('ล้าง')} />
           <div className="change-box" aria-live="polite"><span>{change !== null && change < 0 ? 'เงินยังขาด' : 'เงินทอน'}</span><strong>{baht(Math.abs(change ?? 0))}</strong></div>
           <div className="lottery-reset-actions">
             <button type="button" className="secondary-action" onClick={onCancel}>ย้อนกลับ</button>
-            <button type="button" className="secondary-action" onClick={() => enter('ล้าง')}>ล้าง</button>
-            <button type="submit" className="primary-action" disabled={cash === null || cash < due}>{busy ? 'กำลังยืนยัน…' : approval ? 'ยืนยันว่ารับเงินจริงแล้ว' : 'ยืนยันยอดรับเงิน'}</button>
           </div>
         </fieldset>
       </form>

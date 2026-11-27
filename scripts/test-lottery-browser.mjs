@@ -86,7 +86,7 @@ try {
   const cashInput = cashDialog.getByLabel('เงินที่รับจริง (บาท)', { exact: true });
   const cashConfirm = cashDialog.getByRole('button', { name: 'ยืนยันยอดรับเงิน', exact: true });
   assert.equal(await cashConfirm.isEnabled(), false);
-  for (const [label, amount] of [['พอดี','80.00'],['100','100.00'],['200','200.00'],['500','500.00'],['1,000','1000.00']]) {
+  for (const [label, amount] of [['รับพอดี','80.00'],['100','100.00'],['200','200.00'],['500','500.00'],['1,000','1000.00']]) {
     await cashDialog.getByRole('button', { name: label, exact: true }).click();
     assert.equal(await cashInput.inputValue(), amount);
   }
@@ -185,7 +185,7 @@ try {
   }
   await saveElectricity.click();
   await owner.page.getByRole('alert').filter({ hasText: 'ทดสอบบันทึกไม่สำเร็จ' }).waitFor();
-  assert.equal(await owner.page.getByLabel('เงินสดที่รับจริง (บาท)').inputValue(), '200');
+  assert.equal(Number(await owner.page.getByLabel('เงินสดที่รับจริง (บาท)').inputValue()), 200);
   assert.equal(await owner.page.locator('.transaction-completion').count(), 0);
   await saveElectricity.click();
   await owner.page.getByText(/บันทึกแล้ว · ยอดค่าไฟ/).waitFor();

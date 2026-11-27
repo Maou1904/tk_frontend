@@ -9,6 +9,8 @@ import { jsPDF } from 'jspdf';
 import { QRCodeSVG } from 'qrcode.react';
 import type { CartItem } from './types';
 import TransferPage from './components/TransferPage';
+import ActionKeypad from './components/ActionKeypad';
+import CashShortcuts from './components/CashShortcuts';
 import TransactionCompletion from './components/TransactionCompletion';
 import type { CompletionDetails, CompletionNotice } from './components/TransactionCompletion';
 import PurchaseOrders from './components/PurchaseOrders';
@@ -30,6 +32,7 @@ import LotteryCashDialog from './components/LotteryCashDialog';
 import './App.css';
 import './operations.css';
 import './shop-theme.css';
+import './keypads.css';
 
 type View = 'POS' | 'GAS' | 'LOTTERY' | 'TOPUP' | 'ELECTRICITY' | 'TRANSFER' | 'HISTORY' | 'ANALYTICS' | 'STOCK' | 'STAFF' | 'SETTINGS' | 'CLOSING';
 type PaymentMethod = 'เงินสด' | 'PromptPay';
@@ -482,7 +485,6 @@ const saleChannels: SaleChannel[] = ['POS', 'GAS', 'LOTTERY', 'TOPUP'];
 const paymentMethods: PaymentMethod[] = ['เงินสด', 'PromptPay'];
 const topupProviders: MobileTopupProvider[] = ['AIS', 'TRUE', 'DTAC'];
 const topupQuickAmounts = [20, 50, 100, 150, 200, 300, 500, 1000];
-const topupKeypad = ['1', '2', '3', '4', '5', '6', '7', '8', '9', '0'];
 const closingSectionMeta: Record<ClosingSection, { icon: string; label: string }> = {
   POS: { icon: 'point_of_sale', label: 'สินค้า POS' },
   GAS: { icon: 'propane_tank', label: 'แก๊ส' },
@@ -4244,7 +4246,8 @@ export default function App() {
       setAmountBuffer('');
     }
     function keypress(key: string) {
-      const next = key === 'ลบ' ? amountBuffer.slice(0,-1) : amountBuffer + key;
+      const current = amountBuffer || String(posAmountField === 'discount' ? billDiscount : cashReceived);
+      const next = key === 'ล้าง' ? '' : key === 'ลบ' ? current.slice(0,-1) : amountBuffer + key;
       if (!/^\d{0,8}(?:\.\d{0,2})?$/.test(next)) return;
       setAmountBuffer(next);
       (posAmountField === 'discount' ? setBillDiscount : setCashReceived)(Number(next) || 0);
@@ -4260,12 +4263,15 @@ export default function App() {
         <button aria-pressed={posAmountField === 'discount'} onClick={() => chooseAmount('discount')}>ส่วนลดท้ายบิล <b>{formatMoney(billDiscount)}</b></button>
         <div>ยอดที่ต้องชำระ <strong>{formatMoney(posTotal)}</strong></div>
         <button aria-pressed={posAmountField !== 'discount'} onClick={() => chooseAmount('cash')}>รับเงินมา <b>{formatMoney(cashReceived)}</b></button>
-        <button onClick={() => {setCashReceived(posTotal);chooseAmount('cash');}}>รับพอดี</button>
+        <CashShortcuts due={Math.round(posTotal*100)} value={Math.round(cashReceived*100)} disabled={isPrintingReceipt} onSelect={amount => { setCashReceived(amount/100); chooseAmount('cash'); }} />
         <div>{cashReceived < posTotal ? 'ยังขาด' : 'เงินทอน'} <strong>{formatMoney(Math.abs(cashReceived-posTotal))}</strong></div>
         {billDiscount > posSubtotal && <p>ส่วนลดเกินยอดสินค้า</p>}</div>
-        <div className="number-pad"><output className="keypad-readout">{posAmountField === 'discount' ? 'ส่วนลด' : 'รับเงิน'} · {amountBuffer || (posAmountField === 'discount' ? billDiscount : cashReceived)}</output>{['7','8','9','4','5','6','1','2','3','.','0','ลบ'].map(key => <button key={key} onClick={() => keypress(key)}>{key}</button>)}</div></div>}
+        <ActionKeypad className="number-pad" readout={<>{posAmountField === 'discount' ? 'ส่วนลด' : 'รับเงิน'} · {amountBuffer || (posAmountField === 'discount' ? billDiscount : cashReceived)}</>}
+          actionLabel="สรุปรายการ" disabled={isPrintingReceipt} actionDisabled={!canAdvance} onAction={() => setCheckoutStep(3)}
+          onDigit={keypress} onDelete={() => keypress('ลบ')} onClear={() => keypress('ล้าง')} /></div>}
+
       {checkoutStep === 3 && <div className="money-fields"><div>คนขาย <b>{activeStaff.find(staff => staff.id === cashierId)?.name}</b></div><div>ยอดสุทธิ <strong>{formatMoney(posTotal)}</strong></div><div>รับเงิน <b>{formatMoney(cashReceived)}</b></div><div>เงินทอน <strong>{formatMoney(posChange)}</strong></div></div>}
-      <p role="status">{posNotice}</p><footer><button disabled={isPrintingReceipt} onClick={back}>ย้อนกลับ</button><button className="primary-action" disabled={!canAdvance || isPrintingReceipt} onClick={() => checkoutStep === 3 ? void completePosSale() : setCheckoutStep(checkoutStep + 1)}>{['ยืนยันรายการ','ถัดไป','ถัดไป',isPrintingReceipt ? 'กำลังบันทึก…' : 'ชำระเงิน / พิมพ์ใบเสร็จ'][checkoutStep]}</button></footer>
+      <p role="status">{posNotice}</p><footer><button disabled={isPrintingReceipt} onClick={back}>ย้อนกลับ</button>{checkoutStep !== 2 && <button className="primary-action" disabled={!canAdvance || isPrintingReceipt} onClick={() => checkoutStep === 3 ? void completePosSale() : setCheckoutStep(checkoutStep + 1)}>{['ยืนยันรายการ','ถัดไป','ถัดไป',isPrintingReceipt ? 'กำลังบันทึก…' : 'ชำระเงิน / พิมพ์ใบเสร็จ'][checkoutStep]}</button>}</footer>
     </dialog>;
   }
 
@@ -4878,8 +4884,8 @@ export default function App() {
                 {matchingTicket && <span>ในบิลนี้ {inCart} ใบ · ขายรอบนี้ {sold} ใบ</span>}</>}
               <button className="primary-action" disabled={!matchingTicket || lotteryAvailable(matchingTicket)<1} onClick={searchLottery}>เพิ่มเข้ารายการ</button>
             </div>
-            <div className="counter-keys">{['1','2','3','4','5','6','7','8','9','ล้าง','0','ลบ'].map(key =>
-              <button key={key} onClick={() => setLotteryInput(prev => key === 'ล้าง' ? '' : key === 'ลบ' ? prev.slice(0,-1) : (prev.length >= 2 ? '' : prev)+key)}>{key}</button>)}</div>
+            <ActionKeypad className="counter-keys" decimal={false} actionLabel="เพิ่ม" actionName="เพิ่มเลขเข้ารายการ" actionDisabled={!matchingTicket || lotteryAvailable(matchingTicket) < 1} onAction={searchLottery}
+              onDigit={digit => setLotteryInput(prev => (prev.length >= 2 ? '' : prev) + digit)} onDelete={() => setLotteryInput(prev => prev.slice(0,-1))} onClear={() => setLotteryInput('')} />
           </div>}
         </section>
 
@@ -5034,18 +5040,9 @@ export default function App() {
             />
           </label>
 
-          <div className="topup-keypad">
-            {topupKeypad.filter(digit => digit !== '0').map((digit) => (
-              <button type="button" key={digit} onClick={() => appendTopupPhoneDigit(digit)}>
-                {digit}
-              </button>
-            ))}
-            <button type="button" onClick={() => setTopupPhone('')}>ล้าง</button>
-            <button type="button" onClick={() => appendTopupPhoneDigit('0')}>0</button>
-            <button type="button" className="danger" onClick={deleteTopupPhoneDigit}>
-              ลบ
-            </button>
-          </div>
+          <ActionKeypad className="topup-keypad" decimal={false} actionLabel="ยืนยัน" actionName="ยืนยันจากแป้นตัวเลข" disabled={topupSubmitting}
+            actionDisabled={!/^0\d{9}$/.test(topupPhone) || Number(topupAmount) <= 0} onAction={() => void confirmTopupOrder()}
+            onDigit={appendTopupPhoneDigit} onDelete={deleteTopupPhoneDigit} onClear={() => setTopupPhone('')} />
 
             </div>
           </fieldset>

@@ -1,6 +1,8 @@
-import { useRef, useState } from 'react';
+import { useId, useRef, useState } from 'react';
 import type { FormEvent } from 'react';
 import axios from 'axios';
+import ActionKeypad from './ActionKeypad';
+import CashShortcuts from './CashShortcuts';
 import { baht, bahtInput, dateTime, errorText, operationId, parseMoney, useOperationData } from '../storeOperations';
 import type { CompletionDetails } from './TransactionCompletion';
 import type { Transfer, TransferTotals } from '../storeOperations';
@@ -12,6 +14,7 @@ const logos = ['KBANK', 'SCB', 'KTB', 'BBL', 'BAY', 'GSB', 'BAAC', 'TTB', 'Promp
 const emptyForm = { principal: '', fee: null as string | null, cash: '', bank: '', reference: '', note: '' };
 
 export default function TransferPage({ api, sessionId, isOwner, isShopOpen, service = 'TRANSFER', onComplete }: Props) {
+  const formId = useId();
   const electricity = service === 'ELECTRICITY';
   const principalLabel = electricity ? 'ยอดค่าไฟ' : 'ยอดโอน';
   const path = `${api}/api/app-sessions/${encodeURIComponent(sessionId)}/${electricity ? 'electricity' : 'transfers'}`;
@@ -44,7 +47,7 @@ export default function TransferPage({ api, sessionId, isOwner, isShopOpen, serv
   function enterKey(key: string) {
     const field = review ? 'cash' : amountField;
     const value = (field === 'fee' ? feeValue : form[field]) || '';
-    const next = key === 'ลบ' ? value.slice(0,-1) : (replaceAmount ? '' : value) + key;
+    const next = key === 'ล้าง' ? '' : key === 'ลบ' ? value.slice(0,-1) : (replaceAmount ? '' : value) + key;
     if (!/^\d{0,9}(?:\.\d{0,2})?$/.test(next)) return;
     update(field, next === '.' ? '0.' : next);
     setReplaceAmount(false);
@@ -112,7 +115,7 @@ export default function TransferPage({ api, sessionId, isOwner, isShopOpen, serv
             <div><h2>{electricity ? 'บันทึกรับจ่ายค่าไฟ' : 'บันทึกรับเงินสดเพื่อโอน'}</h2><p>{electricity ? 'จ่ายค่าไฟผ่านช่องทางของร้าน แล้วบันทึกยอดค่าไฟและค่าบริการที่นี่' : 'โอนผ่านแอปธนาคาร แล้วบันทึกรายการที่นี่'}</p></div>
           </div>
           {!isShopOpen && <p className="operation-feedback">เปิดร้านก่อนบันทึกรายการ</p>}
-          <form onSubmit={save}>
+          <form id={formId} onSubmit={save}>
             <fieldset disabled={!isShopOpen || busy || !data} className="operation-fields">
               {!review ? <>
               <div className="operation-form-grid">
@@ -122,14 +125,11 @@ export default function TransferPage({ api, sessionId, isOwner, isShopOpen, serv
               {!electricity && <div className="touch-options bank-options">{banks.map((bank,index) => <button type="button" aria-pressed={form.bank === bank} key={bank} onClick={() => update('bank', bank)}>{logos[index] && <img src={'/banks/'+logos[index]+'.png'} alt=""/>}{bank}</button>)}</div>}
               {electricity && <label className="field"><span>เลขผู้ใช้ไฟ / เลขอ้างอิง (ถ้ามี)</span><input maxLength={100} value={form.reference} onChange={event => update('reference', event.target.value)} /></label>}
               <label className="field"><span>หมายเหตุ</span><input maxLength={250} value={form.note} onChange={(event) => update('note', event.target.value)} /></label>
-              <button type="submit" className="pos-cart-trigger transfer-trigger" disabled={!principal || fee === null || (!electricity && !form.bank)}>สรุปรายการ <strong>{baht(due ?? 0)}</strong></button>
               </> : <><div className="fee-ticket"><span>{electricity ? 'ค่าไฟพร้อมค่าบริการ' : form.bank} · ยอดที่ต้องรับจริง</span><strong>{baht(due ?? 0)}</strong></div>
               <label className="field"><span>เงินสดที่รับจริง (บาท)</span><input required inputMode="decimal" placeholder="0.00" value={form.cash} onChange={(event) => update('cash', event.target.value)} /></label>
-              <div className="operation-actions">
-                <button type="button" className="secondary-action" disabled={due === null || !principal} onClick={() => due !== null && update('cash', bahtInput(due))}>รับพอดี</button>
-                {[100, 200, 500, 1000].map((amount) => <button key={amount} type="button" className="secondary-action" onClick={() => update('cash', String(amount))}>{amount.toLocaleString('th-TH')} บาท</button>)}
-              </div>
-              <div className="operation-actions"><button type="button" className="secondary-action" onClick={() => setReview(false)}>ย้อนกลับ</button><button type="submit" className="primary-action" disabled={difference === null || difference < 0}>{busy ? 'กำลังบันทึก…' : 'รับเงิน'}</button></div></>}
+              <CashShortcuts due={due} value={cash} onSelect={amount => update('cash', bahtInput(amount))} />
+              <div className="operation-actions"><button type="button" className="secondary-action" onClick={() => setReview(false)}>ย้อนกลับ</button></div></>}
+
 
             </fieldset>
           </form>
@@ -138,7 +138,10 @@ export default function TransferPage({ api, sessionId, isOwner, isShopOpen, serv
           <section className="panel cash-dial">
             <h2>{review ? 'เงินสดที่รับ' : amountField === 'fee' ? 'ค่าบริการ' : principalLabel}</h2>
             <output>{(review ? form.cash : amountField === 'fee' ? feeValue : form.principal) || '0'} บาท</output>
-            <div className="counter-keys">{['1','2','3','4','5','6','7','8','9','.','0','ลบ'].map(key => <button key={key} type="button" disabled={!data || !isShopOpen || busy} onClick={() => enterKey(key)}>{key}</button>)}</div>
+            <ActionKeypad className="counter-keys" formId={formId} disabled={!data || !isShopOpen || busy}
+              actionLabel={busy ? 'กำลังบันทึก…' : review ? 'รับเงิน' : 'สรุปรายการ'}
+              actionDisabled={!principal || fee === null || (!electricity && !form.bank) || (review && (difference === null || difference < 0))}
+              onDigit={enterKey} onDelete={() => enterKey('ลบ')} onClear={() => enterKey('ล้าง')} />
             {review && difference !== null && <p aria-live="polite">{difference < 0 ? 'เงินสดยังขาด' : 'เงินทอน'} <b>{baht(Math.abs(difference))}</b></p>}
           </section>
         </div>

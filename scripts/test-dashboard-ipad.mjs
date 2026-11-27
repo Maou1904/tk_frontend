@@ -157,7 +157,24 @@ try {
   await page.getByLabel('ยอดค่าไฟ (บาท)',{exact:true}).fill('123.45');
   await page.getByRole('button',{name:/สรุปรายการ/}).click();
   await page.getByRole('button',{name:'200 บาท',exact:true}).click();
-  await page.getByRole('button',{name:'รับเงิน',exact:true}).click();
+  const exactCash = page.getByRole('button',{name:'รับพอดี',exact:true});
+  for (const [width,height] of [[1024,768],[768,1024]]) {
+    await page.setViewportSize({width,height});
+    const exactBox=await exactCash.boundingBox(),denomination=await page.getByRole('button',{name:'100 บาท',exact:true}).boundingBox();
+    assert(exactBox.width>denomination.width*3 && exactBox.height>denomination.height);
+    const dial=page.locator('.cash-dial');
+    const enterBox=await dial.getByRole('button',{name:'รับเงิน',exact:true}).boundingBox();
+    const deleteBox=await dial.getByRole('button',{name:'ลบ',exact:true}).boundingBox();
+    const digitBox=await dial.getByRole('button',{name:'1',exact:true}).boundingBox();
+    assert(deleteBox.y<enterBox.y && enterBox.height>digitBox.height*1.8);
+    assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true);
+    if (artifactDir) await page.screenshot({path:`${artifactDir}/cash-enter-${width}.png`});
+  }
+  await exactCash.click();
+  assert.equal(await page.getByLabel('เงินสดที่รับจริง (บาท)').inputValue(),'143.45');
+  await page.getByRole('button',{name:'200 บาท',exact:true}).click();
+  await page.locator('.cash-dial').getByRole('button',{name:'0',exact:true}).focus();
+  await page.keyboard.press('Enter');
   await page.locator('.transaction-completion-change').getByText('฿56.55',{exact:true}).waitFor();
   const noticeBox=await page.locator('.transaction-completion').boundingBox();
   const viewport=page.viewportSize();
@@ -177,7 +194,7 @@ try {
   await checkout.getByRole('button',{name:'พนักงาน QA',exact:true}).click();
   await checkout.getByRole('button',{name:'ถัดไป',exact:true}).click();
   for (const digit of ['1','0','0']) await checkout.locator('.number-pad').getByRole('button',{name:digit,exact:true}).click();
-  await checkout.getByRole('button',{name:'ถัดไป',exact:true}).click();
+  await checkout.getByRole('button',{name:'สรุปรายการ',exact:true}).click();
   await checkout.getByRole('button',{name:'ชำระเงิน / พิมพ์ใบเสร็จ',exact:true}).click();
   await page.locator('.transaction-completion-change').getByText('฿20.00',{exact:true}).waitFor();
   await page.emulateMedia({reducedMotion:'reduce'});
