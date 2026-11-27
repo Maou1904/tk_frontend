@@ -12,6 +12,7 @@ import ActionKeypad from './components/ActionKeypad';
 import CashShortcuts from './components/CashShortcuts';
 import TransactionCompletion from './components/TransactionCompletion';
 import type { CompletionDetails, CompletionNotice } from './components/TransactionCompletion';
+import { listenForCheckoutSoundUnlock, playCheckoutSound } from './checkoutSound';
 import PurchaseOrders from './components/PurchaseOrders';
 import TaxDashboard from './components/TaxDashboard';
 import StockDocuments from './components/StockDocuments';
@@ -1390,8 +1391,12 @@ export default function App() {
   const topupAmount = topupAmountOverride ?? String((storeSettings?.topupAmount ?? 10000) / 100);
   const [topupOrders, setTopupOrders] = useState<MobileTopupOrder[]>([]);
   const [completionNotice, setCompletionNotice] = useState<CompletionNotice | null>(null);
-  const showCompletion = useCallback((notice: CompletionDetails) => setCompletionNotice({ ...notice, id: operationId() }), []);
+  const showCompletion = useCallback((notice: CompletionDetails) => {
+    playCheckoutSound();
+    setCompletionNotice({ ...notice, id: operationId() });
+  }, []);
   const dismissCompletion = useCallback(() => setCompletionNotice(null), []);
+  useEffect(listenForCheckoutSoundUnlock, []);
   const [topupSubmitting, setTopupSubmitting] = useState(false);
   const [topupNotice, setTopupNotice] = useState('เลือกค่าย กรอกเบอร์ และจำนวนเงินก่อนยืนยันรายการ');
 

@@ -9,6 +9,19 @@ if (artifactDir) await mkdir(artifactDir, { recursive: true });
 const errors = [], writes = [];
 const context = await browser.newContext({ viewport: { width: 1024, height: 768 }, acceptDownloads: true });
 await context.addInitScript(() => sessionStorage.setItem('tingkum.authSession.v1', JSON.stringify({ token:'mock', expiresAt:'2099-01-01', user:{ id:1, username:'qa', displayName:'ทดสอบ', role:'owner', active:true } })));
+// Observe real Web Audio source starts without substituting the audio engine.
+await context.addInitScript(() => {
+  window.checkoutAudioTest = [];
+  const start = AudioBufferSourceNode.prototype.start;
+  AudioBufferSourceNode.prototype.start = function (...args) {
+    if (this.buffer?.duration > .01) {
+      const samples = this.buffer.getChannelData(0);
+      window.checkoutAudioContext = this.context;
+      window.checkoutAudioTest.push({ state: this.context.state, duration: this.buffer.duration, peak: samples.reduce((peak, sample) => Math.max(peak, Math.abs(sample)), 0) });
+    }
+    return start.apply(this, args);
+  };
+});
 let sales = [], transferRows = [], failTopup = true, topups = [];
 let posCart = [{id:'1',productId:'1',name:'สินค้า QA',barcode:'885000000001',price:80,quantity:1,discount:0}];
 const channels = ['POS','GAS','LOTTERY','TOPUP'];
@@ -147,9 +160,15 @@ try {
   await page.getByRole('button',{name:'ยืนยันรายการ',exact:true}).click();
   await page.getByText('เพิ่มรายการเติมเงินลง tingkum_db ไม่สำเร็จ',{exact:true}).waitFor();
   assert.equal(await page.locator('.transaction-completion').count(),0);
+  assert.equal(await page.evaluate(() => window.checkoutAudioTest.length), 0, 'Failed transactions stay silent');
   assert.equal(await phone.inputValue(),'0812345678');
   await page.getByRole('button',{name:'ยืนยันรายการ',exact:true}).click();
   await page.locator('.transaction-completion').getByText('บันทึกรายการเติมเงินแล้ว',{exact:true}).waitFor();
+  assert.equal(await page.evaluate(() => window.checkoutAudioTest.length), 1, 'A successful retry sounds once');
+  const sound = await page.evaluate(() => window.checkoutAudioTest[0]);
+  assert.equal(sound.state, 'running');
+  assert(sound.duration > .3 && sound.duration < 1 && sound.peak > .1 && sound.peak < 1);
+  await page.evaluate(() => window.checkoutAudioContext.suspend());
   assert.equal(await page.locator('.transaction-completion-change').count(),0);
   assert.equal(writes.filter(write=>write.path.endsWith('/topups')).at(-1).body.amount,200);
   await page.getByRole('button',{name:'ปิดข้อความสำเร็จ',exact:true}).click();
@@ -176,6 +195,7 @@ try {
   await page.locator('.cash-dial').getByRole('button',{name:'0',exact:true}).focus();
   await page.keyboard.press('Enter');
   await page.locator('.transaction-completion-change').getByText('฿56.55',{exact:true}).waitFor();
+  assert.equal(await page.evaluate(() => window.checkoutAudioTest.length), 2, 'Keyboard Enter completion also sounds');
   const noticeBox=await page.locator('.transaction-completion').boundingBox();
   const viewport=page.viewportSize();
   // Wait past the entry animation before inspecting the center or exporting an image.
@@ -197,10 +217,25 @@ try {
   await checkout.getByRole('button',{name:'สรุปรายการ',exact:true}).click();
   await checkout.getByRole('button',{name:'ชำระเงิน / พิมพ์ใบเสร็จ',exact:true}).click();
   await page.locator('.transaction-completion-change').getByText('฿20.00',{exact:true}).waitFor();
+  assert.equal(await page.evaluate(() => window.checkoutAudioTest.length), 3, 'POS uses the same completion sound');
   await page.emulateMedia({reducedMotion:'reduce'});
   assert.equal(await page.locator('.transaction-completion').evaluate(node=>getComputedStyle(node).animationName),'none');
   await page.getByRole('button',{name:'ปิดข้อความสำเร็จ',exact:true}).click();
   assert.equal(await page.locator('.transaction-completion').count(),0);
+  assert.equal(await page.evaluate(() => window.checkoutAudioTest.length), 3, 'Rendering and dismissal do not replay audio');
+  const silentPage = await context.newPage();
+  silentPage.on('pageerror',error=>errors.push(error.message));
+  await silentPage.addInitScript(() => {
+    Object.defineProperty(window, 'AudioContext', { configurable: true, value: undefined });
+    Object.defineProperty(window, 'webkitAudioContext', { configurable: true, value: undefined });
+  });
+  await silentPage.goto(process.env.DASHBOARD_TEST_URL || 'http://127.0.0.1:5178');
+  await silentPage.getByRole('navigation',{name:'เมนูหลัก'}).getByRole('button',{name:'เติมเงิน',exact:true}).click();
+  await silentPage.getByLabel('เบอร์มือถือ',{exact:true}).fill('0812345678');
+  await silentPage.getByRole('button',{name:'ยืนยันรายการ',exact:true}).click();
+  await silentPage.locator('.transaction-completion').getByText('บันทึกรายการเติมเงินแล้ว',{exact:true}).waitFor();
+  assert.equal(await silentPage.evaluate(() => window.checkoutAudioTest.length), 0, 'Checkout works without Web Audio');
+  await silentPage.close();
   assert.deepEqual(errors,[]);
-  console.log('PASS: daily/monthly/yearly graphs, per-service fee totals, zero slots, pagination/last pages/reset, full Excel export, empty reports, iPad columns and button contrast, topup retry, centered completion/change and automatic dismissal. All shop APIs mocked.');
+  console.log('PASS: dashboard/chart/pagination/export, iPad layouts, retries, completion/change/dismissal, real Web Audio success-only playback once, keyboard Enter, resume after suspension, graceful checkout without audio support. All shop APIs mocked.');
 } finally { await context.close(); await browser.close(); }
