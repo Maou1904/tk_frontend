@@ -24,7 +24,7 @@ function createRegisterSound(context: AudioContext) {
         + .15 * Math.sin(2 * Math.PI * frequency * 4.07 * t) * Math.exp(-t * 25);
       value += volume * bell * Math.exp(-t * 11) * Math.min(t / .003, 1);
     }
-    samples[index] = value * Math.min((.72 - time) / .04, 1);
+    samples[index] = value * 1.5 * Math.min((.72 - time) / .04, 1);
   }
   return buffer;
 }
