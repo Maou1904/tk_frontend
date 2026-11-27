@@ -2,7 +2,6 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { FormEvent, ReactNode } from 'react';
 import axios from 'axios';
 import { BrowserMultiFormatReader } from '@zxing/browser';
-import type { IScannerControls } from '@zxing/browser';
 import { BarcodeFormat, DecodeHintType } from '@zxing/library';
 import html2canvas from 'html2canvas';
 import { jsPDF } from 'jspdf';
@@ -33,6 +32,7 @@ import './App.css';
 import './operations.css';
 import './shop-theme.css';
 import './keypads.css';
+import './pos-camera.css';
 
 type View = 'POS' | 'GAS' | 'LOTTERY' | 'TOPUP' | 'ELECTRICITY' | 'TRANSFER' | 'HISTORY' | 'ANALYTICS' | 'STOCK' | 'STAFF' | 'SETTINGS' | 'CLOSING';
 type PaymentMethod = 'เงินสด' | 'PromptPay';
@@ -1245,8 +1245,8 @@ export default function App() {
   const posCheckoutRef = useRef<HTMLDialogElement>(null);
   const scannerVideoRef = useRef<HTMLVideoElement>(null);
   const scannerStreamRef = useRef<MediaStream | null>(null);
-  const scannerFrameRef = useRef<number | null>(null);
-  const scannerControlsRef = useRef<IScannerControls | null>(null);
+  const cameraGenerationRef = useRef(0);
+  const scannerBusyRef = useRef(false);
   const requestedCameraDeviceIdRef = useRef('');
   const activeCameraDeviceIdRef = useRef('');
   const handledPrintRequestIdsRef = useRef<Set<number>>(new Set());
@@ -1289,9 +1289,10 @@ export default function App() {
   const [posCheckoutOpen, setPosCheckoutOpen] = useState(false);
   const [posAmountField, setPosAmountField] = useState<PosAmountField | null>(null);
   const [mobileScannerOpen, setMobileScannerOpen] = useState(false);
-  const [scannerBarcode, setScannerBarcode] = useState('');
   const [scannerNotice, setScannerNotice] = useState('พร้อมส่งบาร์โค้ดเข้าหน้า POS');
   const [cameraActive, setCameraActive] = useState(false);
+  const [cameraStarting, setCameraStarting] = useState(false);
+  const [scannerBusy, setScannerBusy] = useState(false);
   const [cameraDevices, setCameraDevices] = useState<CameraDeviceOption[]>([]);
   const [activeCameraLabel, setActiveCameraLabel] = useState('');
   const [sessionQrOpen, setSessionQrOpen] = useState(false);
@@ -1961,23 +1962,11 @@ export default function App() {
   }, [authSession, currentView, scanSessionId]);
 
   useEffect(() => {
-    if (!mobileScannerOpen) {
-      stopCameraScanner();
-    }
-  }, [mobileScannerOpen]);
-
-  useEffect(() => {
-    if (currentView !== 'POS') {
+    if (currentView !== 'POS' || !authSession) {
       setMobileScannerOpen(false);
       setSessionQrOpen(false);
     }
-  }, [currentView]);
-
-  useEffect(() => {
-    return () => {
-      stopCameraScanner(false);
-    };
-  }, []);
+  }, [currentView, authSession]);
 
   const activeStaff = useMemo(() => staffMembers.filter((staff) => staff.active), [staffMembers]);
   const deliveryStaff = useMemo(
@@ -2520,13 +2509,13 @@ export default function App() {
 
   async function handleBarcodeValue(rawBarcode: string, source: 'desktop' | 'mobile' = 'desktop') {
     if (!requireShopOpen(setPosNotice)) {
-      return;
+      return false;
     }
 
     const query = rawBarcode.trim().toLowerCase();
     if (!query) {
       setPosNotice('กรอกหรือแสกนบาร์โค้ดก่อน');
-      return;
+      return false;
     }
 
     try {
@@ -2537,9 +2526,9 @@ export default function App() {
       applyCartSession(response.data);
       const addedItem = response.data.items.find((item) => item.barcode.toLowerCase() === query);
       setBarcodeInput('');
-      setScannerBarcode('');
       setUnknownBarcode('');
       setPosNotice(`เพิ่ม ${addedItem?.name ?? rawBarcode.trim()} แล้ว${source === 'mobile' ? ' จากมือถือ' : ''}`);
+      return true;
     } catch (error) {
       if (axios.isAxiosError(error) && error.response?.status === 404) {
         const pendingBarcode = rawBarcode.trim();
@@ -2554,15 +2543,16 @@ export default function App() {
           unit: 'ชิ้น',
         });
         setPosNotice(`ไม่พบสินค้า ${pendingBarcode}`);
-        return;
+        return false;
       }
 
       if (axios.isAxiosError(error) && error.response?.status === 409) {
         setPosNotice('สินค้าคงเหลือไม่พอ');
-        return;
+        return false;
       }
 
       setPosNotice('สแกนไม่สำเร็จ เพราะเชื่อมต่อ tingkum_db ไม่ได้');
+      return false;
     }
   }
 
@@ -2570,208 +2560,160 @@ export default function App() {
     void handleBarcodeValue(barcodeInput, 'desktop');
   }
 
-  async function sendScannerBarcode(value = scannerBarcode) {
-    const barcode = value.trim();
-    if (!barcode) {
-      setScannerNotice('กรอกหรือสแกนบาร์โค้ดก่อน');
-      return;
-    }
-
-    try {
-      await handleBarcodeValue(barcode, 'mobile');
-      setScannerNotice(`สแกน ${barcode} เข้า POS session แล้ว`);
-    } catch {
-      setScannerNotice(`สแกนไม่สำเร็จ ตรวจว่า backend เปิดที่ ${API_BASE_URL}`);
-    }
-  }
-
-  function stopCameraScanner(updateState = true) {
-    if (scannerFrameRef.current !== null) {
-      window.cancelAnimationFrame(scannerFrameRef.current);
-      scannerFrameRef.current = null;
-    }
-
-    scannerControlsRef.current?.stop();
-    scannerControlsRef.current = null;
-
+  const stopCameraScanner = useCallback(() => {
+    cameraGenerationRef.current += 1;
     scannerStreamRef.current?.getTracks().forEach((track) => track.stop());
     scannerStreamRef.current = null;
+    if (scannerVideoRef.current) scannerVideoRef.current.srcObject = null;
+    activeCameraDeviceIdRef.current = '';
+    setCameraActive(false);
+    setCameraStarting(false);
+    setActiveCameraLabel('');
+  }, []);
 
-    if (scannerVideoRef.current) {
-      scannerVideoRef.current.srcObject = null;
-    }
-
-    if (updateState) {
-      setCameraActive(false);
-      setActiveCameraLabel('');
-      activeCameraDeviceIdRef.current = '';
-    }
-  }
-
-  async function refreshCameraDeviceState(stream: MediaStream) {
+  const refreshCameraDeviceState = useCallback(async (stream: MediaStream, generation: number) => {
     const devices = await listPreferredCameraDevices();
     const currentDeviceId = getStreamCameraDeviceId(stream);
-    setCameraDevices(devices);
-
-    if (currentDeviceId) {
+    if (generation === cameraGenerationRef.current) {
+      setCameraDevices(devices);
       activeCameraDeviceIdRef.current = currentDeviceId;
-      setActiveCameraLabel(getCameraLabel(devices, currentDeviceId));
-    } else {
-      setActiveCameraLabel('');
+      setActiveCameraLabel(currentDeviceId ? getCameraLabel(devices, currentDeviceId) : '');
     }
-
     return { devices, currentDeviceId };
-  }
+  }, []);
 
   async function switchMobileCamera() {
-    const devices = cameraDevices.length > 0 ? cameraDevices : await listPreferredCameraDevices();
-    if (devices.length <= 1) {
-      setScannerNotice('ไม่พบกล้องอื่นให้สลับ');
-      return;
-    }
-
-    setCameraDevices(devices);
+    if (scannerBusyRef.current || cameraStarting) return;
+    const devices = cameraDevices;
+    if (devices.length <= 1) return;
     const currentDeviceId = activeCameraDeviceIdRef.current || requestedCameraDeviceIdRef.current;
     const currentIndex = devices.findIndex((device) => device.deviceId === currentDeviceId);
     const nextDevice = devices[(currentIndex + 1 + devices.length) % devices.length];
     requestedCameraDeviceIdRef.current = nextDevice.deviceId;
-
-    setScannerNotice(`กำลังสลับกล้องเป็น ${nextDevice.label}`);
     stopCameraScanner();
-    window.setTimeout(() => {
-      void startCameraScanner(nextDevice.deviceId, false);
-    }, 0);
+    await startCameraScanner(nextDevice.deviceId, false);
   }
 
-  async function startZxingScanner(stream: MediaStream, video: HTMLVideoElement) {
-    const reader = createZxingReader();
-    let submittedBarcode = false;
-
-    const controls = await reader.decodeFromStream(stream, video, (result, error, activeControls) => {
-      if (submittedBarcode || error || !result) {
-        return;
-      }
-
-      const barcode = result.getText().trim();
-      if (!barcode) {
-        return;
-      }
-
-      submittedBarcode = true;
-      activeControls.stop();
-      void (async () => {
-        await sendScannerBarcode(barcode);
-        stopCameraScanner();
-      })();
-    });
-
-    if (scannerStreamRef.current !== stream) {
-      controls.stop();
-      return;
-    }
-
-    scannerControlsRef.current = controls;
-    setScannerNotice('เปิดกล้องแล้ว กำลังสแกนบาร์โค้ดด้วยตัวอ่านสำหรับมือถือ');
-  }
-
-  async function startCameraScanner(requestedDeviceId = requestedCameraDeviceIdRef.current, allowPreferredSwitch = true) {
+  const startCameraScanner = useCallback(async function openCamera(
+    requestedDeviceId = requestedCameraDeviceIdRef.current,
+    allowPreferredSwitch = true,
+    generation = ++cameraGenerationRef.current,
+  ) {
     const unavailableNotice = getCameraUnavailableNotice();
     if (unavailableNotice) {
       setScannerNotice(unavailableNotice);
       return;
     }
-
+    setCameraStarting(true);
+    setScannerNotice('กำลังเปิดกล้อง');
     try {
       const video = scannerVideoRef.current;
-      if (!video) {
-        setScannerNotice('เปิดกล้องไม่ได้ เพราะหน้าตัวอย่างกล้องยังไม่พร้อม ลองกด Scan ใหม่');
+      if (!video) throw new Error('Camera preview is unavailable');
+      const stream = await navigator.mediaDevices.getUserMedia(createCameraStreamConstraints(requestedDeviceId));
+      // Permission prompts can resolve after closing the panel or leaving POS.
+      if (generation !== cameraGenerationRef.current) {
+        stream.getTracks().forEach((track) => track.stop());
         return;
       }
-
-      const stream = await navigator.mediaDevices.getUserMedia(createCameraStreamConstraints(requestedDeviceId));
       scannerStreamRef.current = stream;
       await tuneBarcodeCameraStream(stream);
-      setCameraActive(true);
-
-      const cameraState = await refreshCameraDeviceState(stream);
+      if (generation !== cameraGenerationRef.current) return;
+      const cameraState = await refreshCameraDeviceState(stream, generation);
+      if (generation !== cameraGenerationRef.current) return;
       const preferredSwitch = getPreferredCameraSwitch(cameraState.devices, cameraState.currentDeviceId, requestedDeviceId);
       if (allowPreferredSwitch && preferredSwitch) {
         requestedCameraDeviceIdRef.current = preferredSwitch.deviceId;
         stream.getTracks().forEach((track) => track.stop());
         scannerStreamRef.current = null;
-        setScannerNotice(`กำลังใช้กล้องหลังเลนส์หลัก: ${preferredSwitch.label}`);
-        await startCameraScanner(preferredSwitch.deviceId, false);
+        await openCamera(preferredSwitch.deviceId, false, generation);
         return;
       }
-
       video.srcObject = stream;
       await video.play();
-
-      const BarcodeDetector = getBarcodeDetectorConstructor();
-      if (!BarcodeDetector) {
-        await startZxingScanner(stream, video);
-        return;
-      }
-
-      let detector: BarcodeDetectorLike;
-      try {
-        detector = new BarcodeDetector({
-          formats: BARCODE_DETECTOR_FORMATS,
-        });
-      } catch {
-        await startZxingScanner(stream, video);
-        return;
-      }
-
-      setScannerNotice('เปิดกล้องแล้ว กำลังสแกนบาร์โค้ด');
-      let lastDetectedBarcode = '';
-
-      const scanFrame = async () => {
-        if (!scannerVideoRef.current || !scannerStreamRef.current) {
-          return;
-        }
-
-        try {
-          const detections = await detector.detect(scannerVideoRef.current);
-          const barcode = detections[0]?.rawValue?.trim();
-          if (barcode && barcode !== lastDetectedBarcode) {
-            lastDetectedBarcode = barcode;
-            await sendScannerBarcode(barcode);
-            stopCameraScanner();
-            return;
-          }
-        } catch {
-          // Keep scanning while the camera stream is alive.
-        }
-
-        scannerFrameRef.current = window.requestAnimationFrame(scanFrame);
-      };
-
-      scannerFrameRef.current = window.requestAnimationFrame(scanFrame);
+      if (generation !== cameraGenerationRef.current) return;
+      setCameraActive(true);
+      setScannerNotice('พร้อมแล้ว วางบาร์โค้ดในภาพแล้วกดจับภาพสแกน');
     } catch (error) {
+      if (generation !== cameraGenerationRef.current) return;
       if (requestedDeviceId && error instanceof DOMException && (error.name === 'OverconstrainedError' || error.name === 'NotFoundError')) {
         requestedCameraDeviceIdRef.current = '';
-        setScannerNotice('กล้องที่เลือกไว้ใช้ไม่ได้ กำลังลองเปิดกล้องหลัง default');
-        await startCameraScanner('', false);
+        await openCamera('', false, generation);
         return;
       }
-
       stopCameraScanner();
       setScannerNotice(getCameraErrorNotice(error));
+    } finally {
+      if (generation === cameraGenerationRef.current) setCameraStarting(false);
+    }
+  }, [refreshCameraDeviceState, stopCameraScanner]);
+
+  useEffect(() => {
+    if (mobileScannerOpen) void startCameraScanner();
+    return () => stopCameraScanner();
+  }, [mobileScannerOpen, startCameraScanner, stopCameraScanner]);
+
+  async function captureCameraBarcode() {
+    const video = scannerVideoRef.current;
+    const stream = scannerStreamRef.current;
+    if (scannerBusyRef.current || !cameraActive || !video || !stream || posCheckoutOpen || sessionQrOpen || unknownBarcode) return;
+    if (video.readyState < 2 || !video.videoWidth || !video.videoHeight) {
+      setScannerNotice('ภาพกล้องยังไม่พร้อม รอสักครู่แล้วกดจับภาพอีกครั้ง');
+      return;
+    }
+    scannerBusyRef.current = true;
+    setScannerBusy(true);
+    setScannerNotice('กำลังอ่านบาร์โค้ดจากภาพที่จับ');
+    const generation = cameraGenerationRef.current;
+    try {
+      const snapshot = document.createElement('canvas');
+      snapshot.width = video.videoWidth;
+      snapshot.height = video.videoHeight;
+      const context = snapshot.getContext('2d');
+      if (!context) throw new Error('Cannot capture camera frame');
+      context.drawImage(video, 0, 0);
+      // Decode only this frozen frame; the preview continues without a scan loop.
+      await new Promise<void>((resolve) => window.setTimeout(resolve, 0));
+      if (generation !== cameraGenerationRef.current) return;
+      let barcode = '';
+      const BarcodeDetector = getBarcodeDetectorConstructor();
+      if (BarcodeDetector) {
+        try {
+          const detector = new BarcodeDetector({ formats: BARCODE_DETECTOR_FORMATS });
+          const values = [...new Set((await detector.detect(snapshot)).map((result) => result.rawValue?.trim()).filter(Boolean))];
+          if (generation !== cameraGenerationRef.current) return;
+          if (values.length > 1) {
+            setScannerNotice('พบหลายบาร์โค้ด ให้เล็งสินค้าทีละชิ้นแล้วกดจับภาพใหม่');
+            return;
+          }
+          barcode = values[0] || '';
+        } catch {
+          // Safari and unsupported native formats use ZXing on the same snapshot.
+        }
+      }
+      if (!barcode) {
+        try { barcode = createZxingReader().decodeFromCanvas(snapshot).getText().trim(); }
+        catch { /* No readable barcode in this snapshot. */ }
+      }
+      if (generation !== cameraGenerationRef.current) return;
+      if (!barcode) {
+        setScannerNotice('อ่านบาร์โค้ดไม่พบ จัดระยะให้ชัดแล้วกดจับภาพใหม่');
+        return;
+      }
+      const added = await handleBarcodeValue(barcode, 'mobile');
+      if (generation !== cameraGenerationRef.current) return;
+      setScannerNotice(added
+        ? `เพิ่มบาร์โค้ด ${barcode} แล้ว กดจับภาพเพื่อสแกนชิ้นถัดไป`
+        : 'เพิ่มสินค้าไม่สำเร็จ ดูข้อความในรายการขายด้านขวา');
+    } catch {
+      if (generation === cameraGenerationRef.current) setScannerNotice('จับภาพไม่สำเร็จ ลองกดจับภาพใหม่');
+    } finally {
+      scannerBusyRef.current = false;
+      setScannerBusy(false);
     }
   }
 
   function toggleMobileScanner() {
-    if (mobileScannerOpen) {
-      setMobileScannerOpen(false);
-      return;
-    }
-
-    setMobileScannerOpen(true);
-    setScannerNotice('กำลังเปิดกล้องสแกน');
-    window.setTimeout(() => {
-      void startCameraScanner();
-    }, 0);
+    setMobileScannerOpen((open) => !open);
   }
 
   function cancelUnknownProduct() {
@@ -4277,7 +4219,39 @@ export default function App() {
 
   function renderPosPage() {
     return (
-      <div className={`pos-layout${isCompactPos ? ' compact-pos' : ''}`}>
+      <div className={`pos-layout${isCompactPos ? ' compact-pos' : ''}${mobileScannerOpen ? ' camera-mode' : ''}`}>
+        {mobileScannerOpen && (
+          <section className="panel pos-camera-panel" aria-label="กล้องสแกนสินค้า">
+            <div className="pos-camera-heading">
+              <div><h3><Icon name="photo_camera" /> กล้องสแกนสินค้า</h3><p>จับภาพครั้งละหนึ่งชิ้น</p></div>
+              <button className="secondary-action" type="button" aria-label="ปิดกล้องสแกนสินค้า" onClick={toggleMobileScanner}>
+                <Icon name="close" />
+              </button>
+            </div>
+            <div className="scanner-camera-frame pos-camera-preview">
+              <video ref={scannerVideoRef} muted playsInline autoPlay aria-label="ภาพกล้องสแกนสินค้า" />
+              {!cameraActive && <div><Icon name="photo_camera" /><span>{cameraStarting ? 'กำลังเปิดกล้อง' : 'กล้องยังไม่พร้อม'}</span></div>}
+              {cameraActive && <span className="pos-camera-live"><span /> กล้องเปิดอยู่</span>}
+            </div>
+            <button
+              className="primary-action pos-camera-capture"
+              type="button"
+              disabled={!cameraActive || scannerBusy || posCheckoutOpen || sessionQrOpen || Boolean(unknownBarcode)}
+              onClick={() => void captureCameraBarcode()}
+            >
+              <Icon name={scannerBusy ? 'hourglass_top' : 'photo_camera'} />
+              {scannerBusy ? 'กำลังสแกน…' : 'จับภาพสแกน'}
+            </button>
+            <p className="pos-camera-hint">กล้องจะไม่เพิ่มสินค้าเอง กดจับภาพเมื่อพร้อม</p>
+            <div className="pos-camera-status" role="status" aria-live="polite">{scannerNotice}</div>
+            {unknownBarcode && <p className="pos-camera-hint">จัดการสินค้าที่ไม่พบในรายการขายก่อนสแกนต่อ</p>}
+            <div className="pos-camera-actions">
+              {activeCameraLabel && <small>{activeCameraLabel}</small>}
+              {cameraDevices.length > 1 && <button className="secondary-action" type="button" disabled={scannerBusy || cameraStarting} onClick={() => void switchMobileCamera()}><Icon name="cameraswitch" /> สลับกล้อง</button>}
+              {!cameraActive && <button className="secondary-action" type="button" disabled={cameraStarting || scannerBusy} onClick={() => void startCameraScanner()}><Icon name="refresh" /> เปิดกล้องอีกครั้ง</button>}
+            </div>
+          </section>
+        )}
         <section className="panel pos-workspace">
           <PanelTitle
             icon="barcode_scanner"
@@ -4309,54 +4283,14 @@ export default function App() {
                   autoFocus={!isCompactPos}
                 />
                 <button type="button" onClick={scanProduct}><Icon name="add_shopping_cart" /> เพิ่ม</button>
-                <button className="mobile-camera-toggle" type="button" onClick={toggleMobileScanner}>
-                  <Icon name={mobileScannerOpen ? 'keyboard_arrow_up' : 'photo_camera'} />
-                  {mobileScannerOpen ? 'ปิด' : 'Scan'}
+                <button className="mobile-camera-toggle" type="button" aria-pressed={mobileScannerOpen} onClick={toggleMobileScanner}>
+                  <Icon name={mobileScannerOpen ? 'close' : 'photo_camera'} />
+                  {mobileScannerOpen ? 'ปิดกล้อง' : 'เปิดกล้อง'}
                 </button>
               </div>
             </label>
 
 
-          </div>
-
-          <div className={`mobile-camera-panel ${mobileScannerOpen ? 'open' : ''}`}>
-            <div className="scanner-camera-frame mobile-camera-frame">
-              <video ref={scannerVideoRef} muted playsInline autoPlay aria-label="Barcode camera preview" />
-              {!cameraActive && (
-                <div>
-                  <Icon name="photo_camera" />
-                  <span>กด Scan เพื่อเปิดกล้อง หรือกรอกบาร์โค้ดด้านล่าง</span>
-                </div>
-              )}
-            </div>
-
-            {(activeCameraLabel || cameraDevices.length > 1) && (
-              <div className="mobile-camera-actions">
-                <small>{activeCameraLabel ? `กล้อง: ${activeCameraLabel}` : 'กำลังเลือกกล้องหลัง'}</small>
-                {cameraDevices.length > 1 && (
-                  <button type="button" onClick={() => void switchMobileCamera()}>
-                    <Icon name="cameraswitch" /> สลับกล้อง
-                  </button>
-                )}
-              </div>
-            )}
-
-            <div className="scanner-input-block mobile-scanner-fallback">
-              <input
-                value={scannerBarcode}
-                onChange={(event) => setScannerBarcode(event.target.value)}
-                onKeyDown={(event) => event.key === 'Enter' && sendScannerBarcode()}
-                placeholder="กรอกบาร์โค้ดแทนกล้อง"
-              />
-              <button type="button" onClick={() => sendScannerBarcode()}>
-                <Icon name="send" /> เพิ่มเข้า session
-              </button>
-            </div>
-
-            <div className="scanner-client-status">
-              <strong>{scannerNotice}</strong>
-              <small>POS session {scanSessionId}</small>
-            </div>
           </div>
 
           {sessionQrOpen && (
@@ -4554,7 +4488,6 @@ export default function App() {
               aria-controls={posCheckoutOpen ? 'pos-checkout-dialog' : undefined}
               onClick={(event) => {
                 event.currentTarget.focus({ preventScroll: true });
-                setMobileScannerOpen(false);
                 setCheckoutStep(0); setAmountBuffer(''); setPosAmountField('cash'); setPosCheckoutOpen(true);
               }}
             >
