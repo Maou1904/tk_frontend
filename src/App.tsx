@@ -22,10 +22,11 @@ import type { StoreSettings, TransferTotals, Transfer } from './storeOperations'
 import { summarizeTransfers, analyticsBucket } from './analytics';
 import { lotteryStockLevel, LOTTERY_PENDING } from './lotteryStock';
 import LotteryStockReset from './components/LotteryStockReset';
+import LotteryCashDialog from './components/LotteryCashDialog';
 import './App.css';
 import './operations.css';
 
-type View = 'POS' | 'GAS' | 'LOTTERY' | 'TOPUP' | 'TRANSFER' | 'HISTORY' | 'ANALYTICS' | 'STOCK' | 'STAFF' | 'SETTINGS' | 'CLOSING';
+type View = 'POS' | 'GAS' | 'LOTTERY' | 'TOPUP' | 'ELECTRICITY' | 'TRANSFER' | 'HISTORY' | 'ANALYTICS' | 'STOCK' | 'STAFF' | 'SETTINGS' | 'CLOSING';
 type PaymentMethod = 'เงินสด' | 'PromptPay';
 type PosAmountField = 'cash' | 'discount';
 type SaleChannel = 'POS' | 'GAS' | 'LOTTERY' | 'TOPUP';
@@ -180,7 +181,7 @@ interface AppSessionResponse {
   previousClosedSession?: AppSessionResponse | null;
 }
 
-type ClosingSection = 'POS' | 'GAS' | 'LOTTERY' | 'TOPUP' | 'TRANSFER' | 'STOCK';
+type ClosingSection = 'POS' | 'GAS' | 'LOTTERY' | 'TOPUP' | 'ELECTRICITY' | 'TRANSFER' | 'STOCK';
 
 interface ClosingCheck {
   section: ClosingSection;
@@ -201,6 +202,7 @@ interface ClosingSummary {
   readyToClose: boolean;
   sections: {
     transfers?: TransferTotals;
+    electricity?: TransferTotals;
     pos: {
       billCount: number;
       itemCount: number;
@@ -447,6 +449,7 @@ interface PendingGasReturn {
 
 const viewMeta: Record<View, { icon: string; title: string; subtitle: string }> = {
   POS: { icon: 'point_of_sale', title: 'ขายหน้าร้าน', subtitle: 'สแกนสินค้าและคิดเงิน' },
+  ELECTRICITY: { icon: 'bolt', title: 'จ่ายค่าไฟ', subtitle: 'บันทึกยอดค่าไฟและค่าบริการรับจ่าย' },
   TRANSFER: { icon: 'currency_exchange', title: 'รับโอนเงิน', subtitle: 'บันทึกเงินสดที่รับเพื่อโอนให้ลูกค้า' },
   GAS: { icon: 'propane_tank', title: 'ขายแก๊ส', subtitle: 'จัดคิวส่งและติดตามถังคืน' },
   LOTTERY: { icon: 'confirmation_number', title: 'สลาก', subtitle: 'ขายสลากจากเลขในสต็อก' },
@@ -459,7 +462,7 @@ const viewMeta: Record<View, { icon: string; title: string; subtitle: string }> 
   CLOSING: { icon: 'lock_clock', title: 'รอบขาย', subtitle: 'เปิดร้าน ตรวจยอด และปิดร้าน' },
 };
 const navigationGroups: { label: string; views: Exclude<View, 'CLOSING'>[] }[] = [
-  { label: 'หน้าร้าน', views: ['POS', 'TRANSFER', 'GAS', 'LOTTERY', 'TOPUP'] },
+  { label: 'หน้าร้าน', views: ['POS', 'TRANSFER', 'ELECTRICITY', 'GAS', 'LOTTERY', 'TOPUP'] },
   { label: 'จัดการร้าน', views: ['HISTORY', 'ANALYTICS', 'STOCK', 'STAFF', 'SETTINGS'] },
 ];
 
@@ -480,6 +483,7 @@ const closingSectionMeta: Record<ClosingSection, { icon: string; label: string }
   GAS: { icon: 'propane_tank', label: 'แก๊ส' },
   LOTTERY: { icon: 'confirmation_number', label: 'หวย' },
   TOPUP: { icon: 'phone_iphone', label: 'เติมเงิน' },
+  ELECTRICITY: { icon: 'bolt', label: 'จ่ายค่าไฟ' },
   TRANSFER: { icon: 'currency_exchange', label: 'รับโอนเงิน' },
   STOCK: { icon: 'inventory_2', label: 'สต็อกประจำวัน' },
 };
@@ -1271,7 +1275,8 @@ export default function App() {
   const [lotteryCheckoutBusy, setLotteryCheckoutBusy] = useState(false);
   const [lotteryApprovalBusy, setLotteryApprovalBusy] = useState('');
   const [lotteryPendingQueue, setLotteryPendingQueue] = useState<SaleRecord[]>([]);
-  const [lotteryApprovalCash, setLotteryApprovalCash] = useState<Record<string, string>>({});
+  const [lotteryCashError, setLotteryCashError] = useState('');
+  const [lotteryCashTarget, setLotteryCashTarget] = useState<'sale' | SaleRecord | null>(null);
   const [gasBrand, setGasBrand] = useState<GasBrand | ''>('');
   const [posCheckoutOpen, setPosCheckoutOpen] = useState(false);
   const [posAmountField, setPosAmountField] = useState<PosAmountField | null>(null);
@@ -1883,7 +1888,7 @@ export default function App() {
             startDate: response.data.startDate,
             endDate: response.data.endDate,
           });
-          setAnalyticsNotice(`${records.length} บิลขาย · ${response.data.transfers?.length ?? 0} รายการรับโอน`);
+          setAnalyticsNotice(`${records.length} บิลขาย · ${response.data.transfers?.length ?? 0} รายการโอน/ค่าไฟ`);
         })
         .catch(() => {
           if (!cancelled) {
@@ -2083,7 +2088,7 @@ export default function App() {
     });
 
     if (transferSummary.count > 0) {
-      totals.set('ค่าบริการรับโอน (เงินสด)', { total: transferSummary.fee / 100, count: transferSummary.count });
+      totals.set('ค่าบริการโอน/ค่าไฟ (เงินสด)', { total: transferSummary.fee / 100, count: transferSummary.count });
     }
     return Array.from(totals.entries())
       .map(([method, summary]) => ({ method, ...summary }))
@@ -2105,7 +2110,7 @@ export default function App() {
       });
     });
 
-    if (transferSummary.count > 0) totals.set('ค่าบริการรับโอน', transferSummary.fee / 100);
+    if (transferSummary.count > 0) totals.set('ค่าบริการโอน/ค่าไฟ', transferSummary.fee / 100);
     const maxValue = Math.max(1, ...totals.values());
     return Array.from(totals.entries())
       .map(([label, value]) => ({ label, value, percent: Math.round((value / maxValue) * 100) }))
@@ -3511,23 +3516,21 @@ export default function App() {
     } finally { setLotteryCheckoutBusy(false); }
   }
 
-  async function confirmLotteryPayment(sale: SaleRecord) {
+  async function confirmLotteryPayment(sale: SaleRecord, countedCash?: number) {
     if (!isOwner || lotteryApprovalBusy) return;
-    const counted = lotteryApprovalCash[sale.id]?.trim();
-    if (sale.paymentMethod === 'เงินสด' && !counted) {
-      setLotteryNotice('กรอกยอดเงินที่ตรวจนับจริงก่อนยืนยัน'); return;
-    }
-    const cashReceived = sale.paymentMethod === 'เงินสด' ? Number(counted) : sale.total;
+    const cashReceived = sale.paymentMethod === 'เงินสด' ? countedCash ?? 0 : sale.total;
     if (!Number.isFinite(cashReceived) || cashReceived < sale.total) {
       setLotteryNotice('เงินที่ตรวจรับจริงต้องไม่น้อยกว่ายอดรายการ'); return;
     }
+    setLotteryCashError('');
     setLotteryApprovalBusy(sale.id);
     try {
       const { data } = await axios.post<ApiSaleRecord>(`${API_BASE_URL}/api/app-sessions/${encodeURIComponent(sale.sessionId || scanSessionId)}/lottery/${encodeURIComponent(sale.id)}/confirm`, { cashReceived });
       setSalesHistory((previous) => previous.map((row) => row.id === data.id ? normalizeSaleRecord(data) : row));
       setLotteryPendingQueue(previous => previous.filter(row => row.id !== sale.id));
       setLotteryNotice(`ยืนยันรับเงินรายการ ${sale.id} แล้ว`);
-    } catch (error) { setLotteryNotice(errorText(error)); }
+      setLotteryCashTarget(null);
+    } catch (error) { setLotteryNotice(errorText(error)); setLotteryCashError(errorText(error)); }
     finally { setLotteryApprovalBusy(''); }
   }
 
@@ -4085,13 +4088,13 @@ export default function App() {
       ['ตัวชี้วัด', 'ค่า'],
       ['ยอดขายและค่าบริการ', analyticsCombinedTotal],
       ['ยอดขาย', analyticsTotal],
-      ['ค่าบริการรับโอน', transferSummary.fee / 100],
-      ['ยอดโอนให้ลูกค้า', transferSummary.principal / 100],
-      ['รายการรับโอนสำเร็จ', transferSummary.count],
-      ['รายการรับโอนยกเลิก', transferSummary.cancelled],
-      ['เงินสดรับจากบริการโอน', transferSummary.cashReceived / 100],
-      ['เงินทอนจากบริการโอน', transferSummary.change / 100],
-      ['เงินสดสุทธิที่รับจากบริการโอน', transferSummary.cashNet / 100],
+      ['ค่าบริการโอน/ค่าไฟ', transferSummary.fee / 100],
+      ['ยอดโอน/ค่าไฟของลูกค้า', transferSummary.principal / 100],
+      ['รายการโอน/ค่าไฟสำเร็จ', transferSummary.count],
+      ['รายการโอน/ค่าไฟยกเลิก', transferSummary.cancelled],
+      ['เงินสดรับจากโอน/ค่าไฟ', transferSummary.cashReceived / 100],
+      ['เงินทอนจากโอน/ค่าไฟ', transferSummary.change / 100],
+      ['เงินสดสุทธิจากโอน/ค่าไฟ', transferSummary.cashNet / 100],
       ['จำนวนบิล', analyticsSaleCount],
       ['ยอดเฉลี่ยต่อบิล', Math.round(analyticsAverageBill * 100) / 100],
       ['จำนวนชิ้นที่ขาย', analyticsItemCount],
@@ -4109,7 +4112,7 @@ export default function App() {
         analyticsChannelTotals[channel].count,
         analyticsChannelTotals[channel].total,
       ]),
-      ['รับโอนเงิน (ค่าบริการ)', transferSummary.count, transferSummary.fee / 100],
+      ['โอนเงิน/ค่าไฟ (ค่าบริการ)', transferSummary.count, transferSummary.fee / 100],
       [],
       ['การชำระเงิน', 'จำนวนรายการ', 'ยอดขายและค่าบริการ'],
       ...analyticsPaymentTotals.map((payment) => [payment.method, payment.count, payment.total]),
@@ -4166,14 +4169,14 @@ export default function App() {
         excelWorksheet('Sales', salesRows),
         excelWorksheet('Items', itemRows),
         excelWorksheet('Transfers', [
-          ['วันที่เวลา', 'เลขที่', 'ผู้บันทึก', 'ธนาคาร', 'ยอดโอน', 'ค่าบริการ', 'เงินสดรับ', 'เงินทอน', 'สถานะ', 'เหตุผลยกเลิก', 'หมายเหตุ'],
-          ...analyticsTransfers.map((record) => [formatReceiptDateTime(new Date(record.createdAt)), record.id, record.staff, record.bank,
+          ['วันที่เวลา', 'เลขที่', 'ประเภทบริการ', 'ผู้บันทึก', 'ธนาคาร / อ้างอิง', 'ยอดโอน / ค่าไฟ', 'ค่าบริการ', 'เงินสดรับ', 'เงินทอน', 'สถานะ', 'เหตุผลยกเลิก', 'หมายเหตุ'],
+          ...analyticsTransfers.map((record) => [formatReceiptDateTime(new Date(record.createdAt)), record.id, record.serviceType === 'ELECTRICITY' ? 'จ่ายค่าไฟ' : 'รับโอนเงิน', record.staff, record.bank || record.reference,
             record.principal / 100, record.fee / 100, record.cashReceived / 100, record.change / 100,
             record.cancelledAt ? 'ยกเลิก' : 'สำเร็จ', record.cancelReason ?? '', record.note]),
         ]),
       ],
     );
-    setAnalyticsNotice(`ส่งออก Excel ${analyticsSales.length} บิลขายและ ${analyticsTransfers.length} รายการรับโอนแล้ว`);
+    setAnalyticsNotice(`ส่งออก Excel ${analyticsSales.length} บิลขายและ ${analyticsTransfers.length} รายการโอน/ค่าไฟแล้ว`);
   }
 
   function renderPosCheckout() {
@@ -4853,10 +4856,9 @@ export default function App() {
               </button>
             ))}
           </div>
-          <label className="field">
-            <span>{isOwner ? 'รับเงิน' : 'เงินที่แจ้งส่งให้เจ้าของร้านตรวจรับ'}</span>
-            <input type="number" min="0" value={lotteryReceived || ''} onChange={(event) => setLotteryReceived(Number(event.target.value))} />
-          </label>
+          {lotteryPayment === 'เงินสด' && <button type="button" className="secondary-action lottery-cash-trigger" disabled={lotteryCheckoutBusy || lotteryCart.length === 0} onClick={() => { setLotteryCashError(''); setLotteryCashTarget('sale'); }}>
+            <span>{isOwner ? 'รับเงิน' : 'เงินที่แจ้งส่งให้เจ้าของร้านตรวจรับ'}</span><strong>{formatMoney(lotteryReceived)}</strong><Icon name="dialpad" />
+          </button>}
           <div className="change-box">
             <span>เงินทอน</span>
             <strong>{formatMoney(lotteryChange)}</strong>
@@ -4865,7 +4867,6 @@ export default function App() {
             <Icon name="paid" /> {lotteryCheckoutBusy ? 'กำลังส่งรายการ…' : isOwner ? 'ยืนยันรายการและจ่ายแล้ว' : 'ส่งรายการให้เจ้าของร้านยืนยัน'}
           </button>
         </aside>
-        {isOwner && <div className="lottery-period-tools"><LotteryStockReset api={API_BASE_URL} onReset={refreshAfterLotteryReset} /></div>}
         <section className="panel lottery-approval-panel">
           <PanelTitle icon="fact_check" title={isOwner ? 'รายการหวยรอยืนยัน' : 'รายการหวยของฉันที่รอยืนยัน'} detail="กันสต็อกไว้แล้ว ยอดขายจะนับเมื่อเจ้าของร้านยืนยันรับเงิน" />
           {pendingLotterySales.filter((sale) => isOwner || sale.submittedBy === currentUser?.id).length === 0 ? <EmptyState text="ไม่มีรายการรอยืนยัน" /> :
@@ -4876,13 +4877,23 @@ export default function App() {
                 <div>ยอดต้องเก็บ <b>{formatMoney(sale.total)}</b> · {sale.paymentMethod} · แจ้งรับเงิน {formatMoney(sale.reportedCashReceived ?? 0)}</div>
                 {isOwner && <div className="lottery-approval-actions">
                   {sale.paymentMethod === 'PromptPay' && <p>ตรวจยอดเงินเข้าแล้วจึงกดยืนยันรับเงินจริง</p>}
-                  {sale.paymentMethod === 'เงินสด' && <label className="field"><span>เงินที่ตรวจรับจริง (บาท)</span><input type="number" min={sale.total} step="0.01" placeholder="กรอกยอดที่ตรวจนับจริง" value={lotteryApprovalCash[sale.id] ?? ''} onChange={(event) => setLotteryApprovalCash({ ...lotteryApprovalCash, [sale.id]: event.target.value })} /></label>}
-                  <button type="button" className="primary-action" disabled={Boolean(lotteryApprovalBusy)} onClick={() => void confirmLotteryPayment(sale)}>ยืนยันว่ารับเงินจริงแล้ว</button>
+                  <button type="button" className="primary-action" disabled={Boolean(lotteryApprovalBusy)} onClick={() => { setLotteryCashError(''); if (sale.paymentMethod === 'เงินสด') setLotteryCashTarget(sale); else void confirmLotteryPayment(sale); }}>ยืนยันว่ารับเงินจริงแล้ว</button>
                   <button type="button" className="secondary-action" disabled={Boolean(lotteryApprovalBusy)} onClick={() => void cancelSaleRecord(sale)}>ยกเลิกรายการ</button>
                 </div>}
               </article>
             ))}
         </section>
+        {lotteryCashTarget && <LotteryCashDialog
+          key={lotteryCashTarget === 'sale' ? 'sale' : lotteryCashTarget.id}
+          total={lotteryCashTarget === 'sale' ? lotterySubtotal : lotteryCashTarget.total}
+          value={lotteryCashTarget === 'sale' ? lotteryReceived : 0}
+          error={lotteryCashError} approval={lotteryCashTarget !== 'sale'} busy={lotteryCheckoutBusy || Boolean(lotteryApprovalBusy)}
+          onCancel={() => setLotteryCashTarget(null)}
+          onConfirm={amount => {
+            if (lotteryCashTarget === 'sale') { setLotteryReceived(amount); setLotteryCashTarget(null); }
+            else return confirmLotteryPayment(lotteryCashTarget, amount);
+          }}
+        />}
       </div>
     );
   }
@@ -5316,11 +5327,11 @@ export default function App() {
         </section>
 
         <section className="panel analytics-transfer-summary" aria-label="สรุปบริการรับโอนเงิน">
-          <PanelTitle icon="currency_exchange" title="บริการรับโอนเงิน" detail="ยอดรวมและกราฟรวมเฉพาะค่าบริการรับโอน" />
+          <PanelTitle icon="currency_exchange" title="บริการโอนเงินและจ่ายค่าไฟ" detail="ยอดรวมและกราฟรวมเฉพาะค่าบริการโอน/ค่าไฟ" />
           <div className="analytics-transfer-metrics">
-            <div><span>ยอดโอนให้ลูกค้า</span><strong>{baht(transferSummary.principal)}</strong></div>
-            <div><span>ค่าบริการรับโอน</span><strong>{baht(transferSummary.fee)}</strong></div>
-            <div><span>รายการรับโอนสำเร็จ</span><strong>{transferSummary.count} รายการ</strong></div>
+            <div><span>ยอดโอน/ค่าไฟของลูกค้า</span><strong>{baht(transferSummary.principal)}</strong></div>
+            <div><span>ค่าบริการโอน/ค่าไฟ</span><strong>{baht(transferSummary.fee)}</strong></div>
+            <div><span>รายการโอน/ค่าไฟสำเร็จ</span><strong>{transferSummary.count} รายการ</strong></div>
             <div><span>เงินสดสุทธิที่รับ</span><strong>{baht(transferSummary.cashNet)}</strong></div>
           </div>
           <p className="analytics-transfer-note">เงินสดรับ {baht(transferSummary.cashReceived)} · เงินทอน {baht(transferSummary.change)} · ยกเลิก {transferSummary.cancelled} รายการ</p>
@@ -5408,15 +5419,15 @@ export default function App() {
         </section>
 
         <section className="panel analytics-transfer-panel">
-          <PanelTitle icon="currency_exchange" title="รายการรับโอนเงิน" detail={`${analyticsTransfers.length} รายการ | ${periodLabel} ${analyticsRangeLabel}`} />
+          <PanelTitle icon="currency_exchange" title="รายการโอนเงินและจ่ายค่าไฟ" detail={`${analyticsTransfers.length} รายการ | ${periodLabel} ${analyticsRangeLabel}`} />
           <div className="analytics-sales-table">
-            {analyticsTransfers.length === 0 ? <EmptyState text="ยังไม่มีรายการรับโอนในช่วงนี้" /> : (
+            {analyticsTransfers.length === 0 ? <EmptyState text="ยังไม่มีรายการโอน/ค่าไฟในช่วงนี้" /> : (
               <table>
-                <thead><tr><th>วันที่เวลา</th><th>ธนาคาร</th><th>ผู้บันทึก</th><th>ยอดโอน</th><th>ค่าบริการ</th><th>เงินสดรับ</th><th>เงินทอน</th><th>สถานะ</th></tr></thead>
+                <thead><tr><th>วันที่เวลา</th><th>ประเภทบริการ</th><th>ธนาคาร / อ้างอิง</th><th>ผู้บันทึก</th><th>ยอดโอน / ค่าไฟ</th><th>ค่าบริการ</th><th>เงินสดรับ</th><th>เงินทอน</th><th>สถานะ</th></tr></thead>
                 <tbody>{analyticsTransfers.map((record) => (
                   <tr key={record.id}>
                     <td>{formatReceiptDateTime(new Date(record.createdAt))}</td>
-                    <td>{record.bank || '—'}</td><td>{record.staff}</td>
+                    <td>{record.serviceType === 'ELECTRICITY' ? 'จ่ายค่าไฟ' : 'รับโอนเงิน'}</td><td>{record.bank || record.reference || '—'}</td><td>{record.staff}</td>
                     <td>{baht(record.principal)}</td><td>{baht(record.fee)}</td>
                     <td>{baht(record.cashReceived)}</td><td>{baht(record.change)}</td>
                     <td><span className={`badge ${record.cancelledAt ? 'danger' : 'success'}`}>{record.cancelledAt ? 'ยกเลิก' : 'สำเร็จ'}</span>{record.cancelReason && <small>{record.cancelReason}</small>}</td>
@@ -6118,6 +6129,7 @@ export default function App() {
     const confirmedCount = closingSummary?.checks.filter((check) => check.confirmed).length ?? 0;
     const canCloseShop = Boolean(closingSummary?.readyToClose && isOwner && isShopOpen);
     const transfers = closingSummary?.sections.transfers;
+    const electricity = closingSummary?.sections.electricity;
 
     return (
       <div className="closing-page">
@@ -6317,6 +6329,19 @@ export default function App() {
               </div>
               <button className="secondary-action" type="button" onClick={() => setCurrentView('TRANSFER')}>ดูรายการรับโอน</button>
             </section>}
+            {electricity && electricity.records > 0 && <section className="panel closing-section">
+              <div className="closing-section-head">
+                <PanelTitle icon={closingSectionMeta.ELECTRICITY.icon} title={closingSectionMeta.ELECTRICITY.label} detail={`${electricity.count} รายการสำเร็จ`} />
+                {renderClosingConfirm('ELECTRICITY')}
+              </div>
+              <div className="closing-metric-grid">
+                <div><span>ยอดค่าไฟ</span><strong>{baht(electricity.principal)}</strong></div>
+                <div><span>ค่าบริการ</span><strong>{baht(electricity.fee)}</strong></div>
+                <div><span>เงินสดรับ</span><strong>{baht(electricity.cash)}</strong></div>
+                <div><span>เงินทอน</span><strong>{baht(electricity.change)}</strong></div>
+              </div>
+              <button className="secondary-action" type="button" onClick={() => setCurrentView('ELECTRICITY')}>ดูรายการจ่ายค่าไฟ</button>
+            </section>}
             <section className="panel closing-section wide-panel">
               <div className="closing-section-head">
                 <PanelTitle icon={closingSectionMeta.STOCK.icon} title={closingSectionMeta.STOCK.label} detail={`${closingSummary.sections.stock.movementCount} movement | ใกล้หมด ${closingSummary.sections.stock.lowProducts.length}`} />
@@ -6502,6 +6527,8 @@ export default function App() {
         return renderLotteryPage();
       case 'TOPUP':
         return renderTopupPage();
+      case 'ELECTRICITY':
+        return <TransferPage key={`electricity-${scanSessionId}`} service="ELECTRICITY" api={API_BASE_URL} sessionId={scanSessionId} isOwner={isOwner} isShopOpen={isShopOpen} />;
       case 'TRANSFER':
         return <TransferPage key={scanSessionId} api={API_BASE_URL} sessionId={scanSessionId} isOwner={isOwner} isShopOpen={isShopOpen} />;
       case 'HISTORY':

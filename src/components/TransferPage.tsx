@@ -5,13 +5,15 @@ import { baht, bahtInput, dateTime, errorText, operationId, parseMoney, useOpera
 import type { Transfer, TransferTotals } from '../storeOperations';
 
 type TransferData = { totals: TransferTotals; records: Transfer[]; defaultFee: number };
-type Props = { api: string; sessionId: string; isOwner: boolean; isShopOpen: boolean };
+type Props = { api: string; sessionId: string; isOwner: boolean; isShopOpen: boolean; service?: 'TRANSFER' | 'ELECTRICITY' };
 const banks = ['กสิกรไทย', 'ไทยพาณิชย์', 'กรุงไทย', 'กรุงเทพ', 'กรุงศรี', 'ออมสิน', 'ธ.ก.ส.', 'ทหารไทยธนชาต', 'พร้อมเพย์', 'อื่น ๆ'];
 const logos = ['KBANK', 'SCB', 'KTB', 'BBL', 'BAY', 'GSB', 'BAAC', 'TTB', 'PromptPay'];
 const emptyForm = { principal: '', fee: null as string | null, cash: '', bank: '', reference: '', note: '' };
 
-export default function TransferPage({ api, sessionId, isOwner, isShopOpen }: Props) {
-  const path = `${api}/api/app-sessions/${encodeURIComponent(sessionId)}/transfers`;
+export default function TransferPage({ api, sessionId, isOwner, isShopOpen, service = 'TRANSFER' }: Props) {
+  const electricity = service === 'ELECTRICITY';
+  const principalLabel = electricity ? 'ยอดค่าไฟ' : 'ยอดโอน';
+  const path = `${api}/api/app-sessions/${encodeURIComponent(sessionId)}/${electricity ? 'electricity' : 'transfers'}`;
   const [revision, setRevision] = useState(0);
   const { data, loading, error } = useOperationData<TransferData>(path, revision);
   const [form, setForm] = useState(emptyForm);
@@ -50,21 +52,21 @@ export default function TransferPage({ api, sessionId, isOwner, isShopOpen }: Pr
   async function save(event: FormEvent) {
     event.preventDefault();
     if (busy || !isShopOpen) return;
-    if (!review) { if (principal && fee !== null && form.bank) setReview(true); return; }
+    if (!review) { if (principal && fee !== null && (electricity || form.bank)) setReview(true); return; }
     setNotice('');
     setFailure('');
     if (!principal || fee === null || cash === null || difference === null || difference < 0) {
-      setFailure('ตรวจยอดโอน ค่าบริการ และเงินสดรับอีกครั้ง');
+      setFailure(`ตรวจ${principalLabel} ค่าบริการ และเงินสดรับอีกครั้ง`);
       return;
     }
-    const body = { principal, fee, cashReceived: cash, bank: form.bank, note: form.note };
+    const body = { principal, fee, cashReceived: cash, bank: electricity ? '' : form.bank, reference: electricity ? form.reference : '', note: form.note };
     const key = JSON.stringify(body);
     if (pending.current?.key !== key) pending.current = { key, id: operationId() };
     setBusy(true);
     try {
       await axios.post(path, { ...body, id: pending.current.id });
       pending.current = null;
-      setNotice(`บันทึกแล้ว · โอน ${baht(principal)} · ทอน ${baht(difference)}`);
+      setNotice(`บันทึกแล้ว · ${principalLabel} ${baht(principal)} · ทอน ${baht(difference)}`);
       setForm(emptyForm);
       setAmountField('principal'); setReplaceAmount(false);
       setReview(false);
@@ -104,25 +106,26 @@ export default function TransferPage({ api, sessionId, isOwner, isShopOpen }: Pr
       <div className="transfer-workspace">
         <section className="panel operation-panel">
           <div className="operation-heading">
-            <span className="material-symbols-outlined" aria-hidden="true">account_balance</span>
-            <div><h2>บันทึกรับเงินสดเพื่อโอน</h2><p>โอนผ่านแอปธนาคาร แล้วบันทึกรายการที่นี่</p></div>
+            <span className="material-symbols-outlined" aria-hidden="true">{electricity ? 'bolt' : 'account_balance'}</span>
+            <div><h2>{electricity ? 'บันทึกรับจ่ายค่าไฟ' : 'บันทึกรับเงินสดเพื่อโอน'}</h2><p>{electricity ? 'จ่ายค่าไฟผ่านช่องทางของร้าน แล้วบันทึกยอดค่าไฟและค่าบริการที่นี่' : 'โอนผ่านแอปธนาคาร แล้วบันทึกรายการที่นี่'}</p></div>
           </div>
           {!isShopOpen && <p className="operation-feedback">เปิดร้านก่อนบันทึกรายการ</p>}
           <form onSubmit={save}>
             <fieldset disabled={!isShopOpen || busy || !data} className="operation-fields">
               {!review ? <>
               <div className="operation-form-grid">
-                <label className="field"><span>ยอดที่ลูกค้าต้องการโอน (บาท)</span><input ref={principalInput} onFocus={() => {setAmountField('principal');setReplaceAmount(true);}} required inputMode="decimal" placeholder="0.00" value={form.principal} onChange={(event) => update('principal', event.target.value)} /></label>
+                <label className="field"><span>{electricity ? 'ยอดค่าไฟ (บาท)' : 'ยอดที่ลูกค้าต้องการโอน (บาท)'}</span><input ref={principalInput} onFocus={() => {setAmountField('principal');setReplaceAmount(true);}} required inputMode="decimal" placeholder="0.00" value={form.principal} onChange={(event) => update('principal', event.target.value)} /></label>
                 <label className="field"><span>ค่าบริการ (บาท)</span><input onFocus={() => {setAmountField('fee');setReplaceAmount(true);}} required inputMode="decimal" value={feeValue} onChange={(event) => update('fee', event.target.value)} /></label>
               </div>
-              <div className="touch-options bank-options">{banks.map((bank,index) => <button type="button" aria-pressed={form.bank === bank} key={bank} onClick={() => update('bank', bank)}>{logos[index] && <img src={'/banks/'+logos[index]+'.png'} alt=""/>}{bank}</button>)}</div>
+              {!electricity && <div className="touch-options bank-options">{banks.map((bank,index) => <button type="button" aria-pressed={form.bank === bank} key={bank} onClick={() => update('bank', bank)}>{logos[index] && <img src={'/banks/'+logos[index]+'.png'} alt=""/>}{bank}</button>)}</div>}
+              {electricity && <label className="field"><span>เลขผู้ใช้ไฟ / เลขอ้างอิง (ถ้ามี)</span><input maxLength={100} value={form.reference} onChange={event => update('reference', event.target.value)} /></label>}
               <label className="field"><span>หมายเหตุ</span><input maxLength={250} value={form.note} onChange={(event) => update('note', event.target.value)} /></label>
-              <button type="submit" className="pos-cart-trigger transfer-trigger" disabled={!principal || fee === null || !form.bank}>สรุปรายการ <strong>{baht(due ?? 0)}</strong></button>
-              </> : <><div className="fee-ticket"><span>{form.bank} · ยอดที่ต้องรับจริง</span><strong>{baht(due ?? 0)}</strong></div>
+              <button type="submit" className="pos-cart-trigger transfer-trigger" disabled={!principal || fee === null || (!electricity && !form.bank)}>สรุปรายการ <strong>{baht(due ?? 0)}</strong></button>
+              </> : <><div className="fee-ticket"><span>{electricity ? 'ค่าไฟพร้อมค่าบริการ' : form.bank} · ยอดที่ต้องรับจริง</span><strong>{baht(due ?? 0)}</strong></div>
               <label className="field"><span>เงินสดที่รับจริง (บาท)</span><input required inputMode="decimal" placeholder="0.00" value={form.cash} onChange={(event) => update('cash', event.target.value)} /></label>
               <div className="operation-actions">
                 <button type="button" className="secondary-action" disabled={due === null || !principal} onClick={() => due !== null && update('cash', bahtInput(due))}>รับพอดี</button>
-                {[100, 500, 1000].map((amount) => <button key={amount} type="button" className="secondary-action" onClick={() => update('cash', String(amount))}>{amount.toLocaleString('th-TH')} บาท</button>)}
+                {[100, 200, 500, 1000].map((amount) => <button key={amount} type="button" className="secondary-action" onClick={() => update('cash', String(amount))}>{amount.toLocaleString('th-TH')} บาท</button>)}
               </div>
               <div className="operation-actions"><button type="button" className="secondary-action" onClick={() => setReview(false)}>ย้อนกลับ</button><button type="submit" className="primary-action" disabled={difference === null || difference < 0}>{busy ? 'กำลังบันทึก…' : 'รับเงิน'}</button></div></>}
 
@@ -131,7 +134,7 @@ export default function TransferPage({ api, sessionId, isOwner, isShopOpen }: Pr
         </section>
         <div className="operation-stack">
           <section className="panel cash-dial">
-            <h2>{review ? 'เงินสดที่รับ' : amountField === 'fee' ? 'ค่าบริการ' : 'ยอดโอน'}</h2>
+            <h2>{review ? 'เงินสดที่รับ' : amountField === 'fee' ? 'ค่าบริการ' : principalLabel}</h2>
             <output>{(review ? form.cash : amountField === 'fee' ? feeValue : form.principal) || '0'} บาท</output>
             <div className="counter-keys">{['1','2','3','4','5','6','7','8','9','.','0','ลบ'].map(key => <button key={key} type="button" disabled={!data || !isShopOpen || busy} onClick={() => enterKey(key)}>{key}</button>)}</div>
             {review && difference !== null && <p aria-live="polite">{difference < 0 ? 'เงินสดยังขาด' : 'เงินทอน'} <b>{baht(Math.abs(difference))}</b></p>}
@@ -139,24 +142,24 @@ export default function TransferPage({ api, sessionId, isOwner, isShopOpen }: Pr
         </div>
       </div>
       <section className="panel operation-panel">
-        <div className="operation-title-row"><div><h2>รายการรับโอนรอบนี้</h2><p>{data ? `${data.totals.count} รายการสำเร็จ · แสดงล่าสุดสูงสุด 100 รายการ` : ''}</p></div><button className="secondary-action" type="button" onClick={refresh} disabled={loading}>รีเฟรช</button></div>
+        <div className="operation-title-row"><div><h2>{electricity ? 'รายการจ่ายค่าไฟรอบนี้' : 'รายการรับโอนรอบนี้'}</h2><p>{data ? `${data.totals.count} รายการสำเร็จ · แสดงล่าสุดสูงสุด 100 รายการ` : ''}</p></div><button className="secondary-action" type="button" onClick={refresh} disabled={loading}>รีเฟรช</button></div>
         {data && <div className="operation-metrics">
-          {([['ยอดที่โอน', data.totals.principal], ['ค่าบริการ', data.totals.fee], ['เงินสดรับ', data.totals.cash], ['เงินทอน', data.totals.change]] as const).map(([label, value]) => <div key={label}><span>{label}</span><strong>{baht(value)}</strong></div>)}
+          {([[electricity ? 'ยอดค่าไฟ' : 'ยอดที่โอน', data.totals.principal], ['ค่าบริการ', data.totals.fee], ['เงินสดรับ', data.totals.cash], ['เงินทอน', data.totals.change]] as const).map(([label, value]) => <div key={label}><span>{label}</span><strong>{baht(value)}</strong></div>)}
         </div>}
         {cancel && <form className="operation-feedback operation-stack" onSubmit={cancelTransfer}>
-          <strong>ยกเลิกบันทึกรายการ {baht(cancel.principal)}</strong><p>ตรวจสอบธุรกรรมในแอปธนาคารก่อน การยกเลิกนี้มีผลกับบันทึกของร้าน</p>
+          <strong>ยกเลิกบันทึกรายการ {baht(cancel.principal)}</strong><p>{electricity ? 'ตรวจสอบการจ่ายค่าไฟก่อน การยกเลิกนี้มีผลกับบันทึกของร้าน' : 'ตรวจสอบธุรกรรมในแอปธนาคารก่อน การยกเลิกนี้มีผลกับบันทึกของร้าน'}</p>
           <label className="field"><span>เหตุผล</span><input required maxLength={250} value={reason} onChange={(event) => setReason(event.target.value)} /></label>
           <div className="operation-actions"><button className="secondary-action" type="button" onClick={() => { setCancel(undefined); setReason(''); }} disabled={busy}>กลับ</button><button className="danger-action" type="submit" disabled={busy || !reason.trim()}>ยืนยันยกเลิก</button></div>
         </form>}
         {data?.records.length ? <div className="operation-table"><table>
-          <thead><tr><th>เวลา / ผู้บันทึก</th><th>ธนาคาร / อ้างอิง</th><th>ยอดโอน</th><th>ค่าบริการ</th><th>รับสด</th><th>ทอน</th><th>สถานะ</th></tr></thead>
+          <thead><tr><th>เวลา / ผู้บันทึก</th><th>{electricity ? 'เลขผู้ใช้ไฟ / อ้างอิง' : 'ธนาคาร / อ้างอิง'}</th><th>{principalLabel}</th><th>ค่าบริการ</th><th>รับสด</th><th>ทอน</th><th>สถานะ</th></tr></thead>
           <tbody>{data.records.map((row) => <tr key={row.id}>
             <td>{dateTime(row.createdAt)}<small>{row.staff}</small></td>
-            <td>{row.bank || '—'}<small>{row.reference}{row.reference && row.note ? ' · ' : ''}{row.note}</small></td>
+            <td>{electricity ? row.reference || '—' : row.bank || '—'}<small>{!electricity && row.reference}{!electricity && row.reference && row.note ? ' · ' : ''}{row.note}</small></td>
             <td>{baht(row.principal)}</td><td>{baht(row.fee)}</td><td>{baht(row.cashReceived)}</td><td>{baht(row.change)}</td>
             <td>{row.cancelledAt ? <><span className="badge danger">ยกเลิกแล้ว</span><small>{row.cancelReason}</small></> : isOwner && isShopOpen ? <button type="button" className="text-action" disabled={busy} onClick={() => { setCancel(row); setReason(''); }}>ยกเลิกบันทึก</button> : <span className="badge success">บันทึกแล้ว</span>}</td>
           </tr>)}</tbody>
-        </table></div> : <p className="operation-empty">{loading ? 'กำลังโหลดรายการ…' : 'ยังไม่มีรายการรับโอนในรอบนี้'}</p>}
+        </table></div> : <p className="operation-empty">{loading ? 'กำลังโหลดรายการ…' : electricity ? 'ยังไม่มีรายการจ่ายค่าไฟในรอบนี้' : 'ยังไม่มีรายการรับโอนในรอบนี้'}</p>}
       </section>
     </div>
   );

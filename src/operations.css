@@ -293,3 +293,13 @@ dialog.shop-wizard {width:min(760px,calc(100% - 1rem));max-height:92dvh;overflow
 .lottery-reset-notice { color: var(--color-danger); }
 .lottery-reset-actions { display: flex; gap: 0.8rem; justify-content: flex-end; flex-wrap: wrap; }
 .lottery-reset-actions button { min-height: 48px; }
+
+.lottery-cash-backdrop { z-index: 220; padding: 1rem; }
+.lottery-cash-dialog { width: min(520px, 100%); max-height: calc(100dvh - 2rem); overflow-y: auto; display: grid; gap: 14px; }
+.lottery-cash-dialog h2 { margin: 0; }
+.lottery-cash-shortcuts { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 8px; }
+.lottery-cash-shortcuts button { min-height: 48px; padding: 8px 3px; border: 1px solid #bbd0c9; border-radius: 10px; background: #e7f4f1; color: #174b3e; font-weight: 700; }
+.lottery-cash-dialog .field input { font-size: 1.6rem; text-align: right; }
+.lottery-cash-dialog .counter-keys button { min-height: 52px; }
+.lottery-cash-trigger { width: 100%; display: flex; justify-content: space-between; align-items: center; min-height: 56px; gap: 12px; }
+@media (max-height: 700px) { .lottery-cash-dialog { gap: 8px; } .lottery-cash-dialog .counter-keys button { min-height: 44px; } }

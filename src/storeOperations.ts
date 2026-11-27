@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import axios from 'axios';
 
 export type Transfer = {
+  serviceType?: 'TRANSFER' | 'ELECTRICITY';
   id: string;
   principal: number;
   fee: number;
@@ -17,7 +18,7 @@ export type Transfer = {
 };
 
 export type TransferTotals = { records: number; count: number; principal: number; fee: number; cash: number; change: number };
-export type StoreSettings = { defaultFee: number; gasDeliveryFee: number; topupAmount: number };
+export type StoreSettings = { defaultFee: number; electricityFee: number; gasDeliveryFee: number; topupAmount: number };
 export type StockProduct = { id: number; name: string; barcode: string; stock: number; unit: string };
 
 const money = new Intl.NumberFormat('th-TH', { style: 'currency', currency: 'THB' });

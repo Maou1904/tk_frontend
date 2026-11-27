@@ -6,6 +6,7 @@ import type { StoreSettings } from '../storeOperations';
 
 const fields = [
   ['defaultFee', 'ค่าบริการรับโอนต่อรายการ'],
+  ['electricityFee', 'ค่าบริการจ่ายค่าไฟต่อรายการ'],
   ['gasDeliveryFee', 'ค่าจัดส่งแก๊สเริ่มต้น'],
   ['topupAmount', 'ยอดเติมเงินมือถือเริ่มต้น'],
 ] as const;
@@ -22,22 +23,23 @@ export default function StoreSettingsPage({ api, onSave, onChangePassword, onMan
   const [saved, setSaved] = useState<StoreSettings>();
   const [feedback, setFeedback] = useState('');
   const current = saved ?? data;
-  const value = (key: keyof StoreSettings) => draft[key] ?? (current ? bahtInput(current[key]) : '');
+  const value = (key: keyof StoreSettings) => draft[key] ?? (current ? bahtInput(current[key] ?? 0) : '');
 
   async function save(event: FormEvent) {
     event.preventDefault();
+    const electricityFee = parseMoney(value('electricityFee'));
     const defaultFee = parseMoney(value('defaultFee'));
     const gasDeliveryFee = parseMoney(value('gasDeliveryFee'));
     const topupAmount = parseMoney(value('topupAmount'));
     if (busy || !current) return;
-    if (defaultFee === null || gasDeliveryFee === null || !topupAmount) {
+    if (electricityFee === null || defaultFee === null || gasDeliveryFee === null || !topupAmount) {
       setFeedback('ตรวจจำนวนเงินอีกครั้ง ยอดเติมเงินเริ่มต้นต้องมากกว่าศูนย์');
       return;
     }
     setBusy(true);
     setFeedback('');
     try {
-      const response = await axios.put<StoreSettings>(path, { defaultFee, gasDeliveryFee, topupAmount });
+      const response = await axios.put<StoreSettings>(path, { defaultFee, electricityFee, gasDeliveryFee, topupAmount });
       setSaved(response.data);
       setDraft({});
       onSave(response.data);
