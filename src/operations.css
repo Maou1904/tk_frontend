@@ -59,6 +59,10 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 .operation-panel .field :is(input, select, textarea) { min-height: 42px; }
 .operation-panel .field textarea { resize: vertical; }
 .operation-fields { border: 0; padding: 0; margin: 0; min-inline-size: 0; }
+.electricity-rounding-summary { display: grid; gap: 10px; margin: 0; padding: 14px; border: 1px solid var(--color-border-surface); border-radius: 10px; }
+.electricity-rounding-summary > div { display: flex; justify-content: space-between; gap: 12px; }
+.electricity-rounding-summary dt { color: var(--color-muted); }
+.electricity-rounding-summary dd { margin: 0; font-weight: 650; font-variant-numeric: tabular-nums; white-space: nowrap; }
 .operation-form-grid { display: grid; gap: .75rem; grid-template-columns: repeat(2, minmax(0, 1fr)); }
 .operation-settings-grid { display: grid; gap: .75rem; grid-template-columns: repeat(auto-fit, minmax(min(100%, 205px), 1fr)); }
 .product-details-dialog { margin: auto; width: min(calc(100% - 2rem), 420px); max-height: calc(100% - 2rem); border-radius: 8px; }

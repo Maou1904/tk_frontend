@@ -6,6 +6,8 @@ export type Transfer = {
   id: string;
   principal: number;
   fee: number;
+  /** Included in fee; preserves the configured service fee as fee - rounding. */
+  rounding?: number;
   cashReceived: number;
   change: number;
   bank: string;
@@ -17,7 +19,7 @@ export type Transfer = {
   cancelReason: string | null;
 };
 
-export type TransferTotals = { records: number; count: number; principal: number; fee: number; cash: number; change: number };
+export type TransferTotals = { records: number; count: number; principal: number; fee: number; rounding?: number; cash: number; change: number };
 export type StoreSettings = { defaultFee: number; electricityFee: number; gasDeliveryFee: number; topupAmount: number };
 export type StockProduct = { id: number; name: string; barcode: string; stock: number; unit: string };
 

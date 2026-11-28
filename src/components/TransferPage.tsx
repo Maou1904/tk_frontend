@@ -36,7 +36,9 @@ export default function TransferPage({ api, sessionId, isOwner, isShopOpen, serv
   const principal = parseMoney(form.principal);
   const fee = parseMoney(feeValue);
   const cash = parseMoney(form.cash);
-  const due = principal !== null && fee !== null ? principal + fee : null;
+  const subtotal = principal !== null && fee !== null ? principal + fee : null;
+  const rounding = electricity && subtotal !== null ? (100 - subtotal % 100) % 100 : 0;
+  const due = subtotal !== null ? subtotal + rounding : null;
   const difference = due !== null && cash !== null ? cash - due : null;
 
   function update(field: keyof typeof emptyForm, value: string) {
@@ -63,7 +65,7 @@ export default function TransferPage({ api, sessionId, isOwner, isShopOpen, serv
       setFailure(`ตรวจ${principalLabel} ค่าบริการ และเงินสดรับอีกครั้ง`);
       return;
     }
-    const body = { principal, fee, cashReceived: cash, bank: electricity ? '' : form.bank, reference: electricity ? form.reference : '', note: form.note };
+    const body = { principal, fee: fee + rounding, ...(electricity ? { rounding } : {}), cashReceived: cash, bank: electricity ? '' : form.bank, reference: electricity ? form.reference : '', note: form.note };
     const key = JSON.stringify(body);
     if (pending.current?.key !== key) pending.current = { key, id: operationId() };
     setBusy(true);
@@ -125,7 +127,14 @@ export default function TransferPage({ api, sessionId, isOwner, isShopOpen, serv
               {!electricity && <div className="touch-options bank-options">{banks.map((bank,index) => <button type="button" aria-pressed={form.bank === bank} key={bank} onClick={() => update('bank', bank)}>{logos[index] && <img src={'/banks/'+logos[index]+'.png'} alt=""/>}{bank}</button>)}</div>}
               {electricity && <label className="field"><span>เลขผู้ใช้ไฟ / เลขอ้างอิง (ถ้ามี)</span><input maxLength={100} value={form.reference} onChange={event => update('reference', event.target.value)} /></label>}
               <label className="field"><span>หมายเหตุ</span><input maxLength={250} value={form.note} onChange={(event) => update('note', event.target.value)} /></label>
-              </> : <><div className="fee-ticket"><span>{electricity ? 'ค่าไฟพร้อมค่าบริการ' : form.bank} · ยอดที่ต้องรับจริง</span><strong>{baht(due ?? 0)}</strong></div>
+              </> : <>
+              {electricity && <dl className="electricity-rounding-summary" aria-label="สรุปยอดจ่ายค่าไฟ">
+                <div><dt>ค่าไฟตามบิล</dt><dd>{baht(principal ?? 0)}</dd></div>
+                <div><dt>ค่าบริการ</dt><dd>{baht(fee ?? 0)}</dd></div>
+                <div><dt>รวมก่อนปัดเศษ</dt><dd>{baht(subtotal ?? 0)}</dd></div>
+                <div><dt>ปัดขึ้นเป็นบาทเต็ม</dt><dd>+{baht(rounding)}</dd></div>
+              </dl>}
+              <div className="fee-ticket"><span>{electricity ? 'ค่าไฟพร้อมค่าบริการ' : form.bank} · ยอดที่ต้องรับจริง</span><strong>{baht(due ?? 0)}</strong></div>
               <label className="field"><span>เงินสดที่รับจริง (บาท)</span><input required inputMode="decimal" placeholder="0.00" value={form.cash} onChange={(event) => update('cash', event.target.value)} /></label>
               <CashShortcuts due={due} value={cash} onSelect={amount => update('cash', bahtInput(amount))} />
               <div className="operation-actions"><button type="button" className="secondary-action" onClick={() => setReview(false)}>ย้อนกลับ</button></div></>}
@@ -149,7 +158,7 @@ export default function TransferPage({ api, sessionId, isOwner, isShopOpen, serv
       <section className="panel operation-panel">
         <div className="operation-title-row"><div><h2>{electricity ? 'รายการจ่ายค่าไฟรอบนี้' : 'รายการรับโอนรอบนี้'}</h2><p>{data ? `${data.totals.count} รายการสำเร็จ · แสดงล่าสุดสูงสุด 100 รายการ` : ''}</p></div><button className="secondary-action" type="button" onClick={refresh} disabled={loading}>รีเฟรช</button></div>
         {data && <div className="operation-metrics">
-          {([[electricity ? 'ยอดค่าไฟ' : 'ยอดที่โอน', data.totals.principal], ['ค่าบริการ', data.totals.fee], ['เงินสดรับ', data.totals.cash], ['เงินทอน', data.totals.change]] as const).map(([label, value]) => <div key={label}><span>{label}</span><strong>{baht(value)}</strong></div>)}
+          {([[electricity ? 'ยอดค่าไฟ' : 'ยอดที่โอน', data.totals.principal], [electricity ? 'ค่าบริการรวมปัดเศษ' : 'ค่าบริการ', data.totals.fee], ['เงินสดรับ', data.totals.cash], ['เงินทอน', data.totals.change]] as const).map(([label, value]) => <div key={label}><span>{label}</span><strong>{baht(value)}</strong></div>)}
         </div>}
         {cancel && <form className="operation-feedback operation-stack" onSubmit={cancelTransfer}>
           <strong>ยกเลิกบันทึกรายการ {baht(cancel.principal)}</strong><p>{electricity ? 'ตรวจสอบการจ่ายค่าไฟก่อน การยกเลิกนี้มีผลกับบันทึกของร้าน' : 'ตรวจสอบธุรกรรมในแอปธนาคารก่อน การยกเลิกนี้มีผลกับบันทึกของร้าน'}</p>
@@ -157,11 +166,11 @@ export default function TransferPage({ api, sessionId, isOwner, isShopOpen, serv
           <div className="operation-actions"><button className="secondary-action" type="button" onClick={() => { setCancel(undefined); setReason(''); }} disabled={busy}>กลับ</button><button className="danger-action" type="submit" disabled={busy || !reason.trim()}>ยืนยันยกเลิก</button></div>
         </form>}
         {data?.records.length ? <div className="operation-table"><table>
-          <thead><tr><th>เวลา / ผู้บันทึก</th><th>{electricity ? 'เลขผู้ใช้ไฟ / อ้างอิง' : 'ธนาคาร / อ้างอิง'}</th><th>{principalLabel}</th><th>ค่าบริการ</th><th>รับสด</th><th>ทอน</th><th>สถานะ</th></tr></thead>
+          <thead><tr><th>เวลา / ผู้บันทึก</th><th>{electricity ? 'เลขผู้ใช้ไฟ / อ้างอิง' : 'ธนาคาร / อ้างอิง'}</th><th>{principalLabel}</th><th>{electricity ? 'ค่าบริการรวมปัดเศษ' : 'ค่าบริการ'}</th><th>รับสด</th><th>ทอน</th><th>สถานะ</th></tr></thead>
           <tbody>{data.records.map((row) => <tr key={row.id}>
             <td>{dateTime(row.createdAt)}<small>{row.staff}</small></td>
             <td>{electricity ? row.reference || '—' : row.bank || '—'}<small>{!electricity && row.reference}{!electricity && row.reference && row.note ? ' · ' : ''}{row.note}</small></td>
-            <td>{baht(row.principal)}</td><td>{baht(row.fee)}</td><td>{baht(row.cashReceived)}</td><td>{baht(row.change)}</td>
+            <td>{baht(row.principal)}</td><td>{baht(row.fee)}{Boolean(row.rounding) && <small>ค่าบริการ {baht(row.fee - row.rounding!)} · ปัดเศษ {baht(row.rounding!)}</small>}</td><td>{baht(row.cashReceived)}</td><td>{baht(row.change)}</td>
             <td>{row.cancelledAt ? <><span className="badge danger">ยกเลิกแล้ว</span><small>{row.cancelReason}</small></> : isOwner && isShopOpen ? <button type="button" className="text-action" disabled={busy} onClick={() => { setCancel(row); setReason(''); }}>ยกเลิกบันทึก</button> : <span className="badge success">บันทึกแล้ว</span>}</td>
           </tr>)}</tbody>
         </table></div> : <p className="operation-empty">{loading ? 'กำลังโหลดรายการ…' : electricity ? 'ยังไม่มีรายการจ่ายค่าไฟในรอบนี้' : 'ยังไม่มีรายการรับโอนในรอบนี้'}</p>}

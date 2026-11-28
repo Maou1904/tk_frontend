@@ -4171,9 +4171,9 @@ export default function App() {
         excelWorksheet('Sales', salesRows),
         excelWorksheet('Items', itemRows),
         excelWorksheet('Transfers', [
-          ['วันที่เวลา', 'เลขที่', 'ประเภทบริการ', 'ผู้บันทึก', 'ธนาคาร / อ้างอิง', 'ยอดโอน / ค่าไฟ', 'ค่าบริการ', 'เงินสดรับ', 'เงินทอน', 'สถานะ', 'เหตุผลยกเลิก', 'หมายเหตุ'],
+          ['วันที่เวลา', 'เลขที่', 'ประเภทบริการ', 'ผู้บันทึก', 'ธนาคาร / อ้างอิง', 'ยอดโอน / ค่าไฟ', 'ค่าบริการรวมปัดเศษ', 'ส่วนปัดเศษที่รวมแล้ว', 'เงินสดรับ', 'เงินทอน', 'สถานะ', 'เหตุผลยกเลิก', 'หมายเหตุ'],
           ...analyticsTransfers.map((record) => [formatReceiptDateTime(new Date(record.createdAt)), record.id, record.serviceType === 'ELECTRICITY' ? 'จ่ายค่าไฟ' : 'รับโอนเงิน', record.staff, record.bank || record.reference,
-            record.principal / 100, record.fee / 100, record.cashReceived / 100, record.change / 100,
+            record.principal / 100, record.fee / 100, (record.rounding ?? 0) / 100, record.cashReceived / 100, record.change / 100,
             record.cancelledAt ? 'ยกเลิก' : 'สำเร็จ', record.cancelReason ?? '', record.note]),
         ]),
       ],
@@ -5422,12 +5422,12 @@ export default function App() {
           <div className="analytics-sales-table">
             {analyticsTransfers.length === 0 ? <EmptyState text="ยังไม่มีรายการโอน/ค่าไฟในช่วงนี้" /> : (
               <table>
-                <thead><tr><th>วันที่เวลา</th><th>ประเภทบริการ</th><th>ธนาคาร / อ้างอิง</th><th>ผู้บันทึก</th><th>ยอดโอน / ค่าไฟ</th><th>ค่าบริการ</th><th>เงินสดรับ</th><th>เงินทอน</th><th>สถานะ</th></tr></thead>
+                <thead><tr><th>วันที่เวลา</th><th>ประเภทบริการ</th><th>ธนาคาร / อ้างอิง</th><th>ผู้บันทึก</th><th>ยอดโอน / ค่าไฟ</th><th>ค่าบริการรวมปัดเศษ</th><th>เงินสดรับ</th><th>เงินทอน</th><th>สถานะ</th></tr></thead>
                 <tbody>{analyticsTransfers.map((record) => (
                   <tr key={record.id}>
                     <td>{formatReceiptDateTime(new Date(record.createdAt))}</td>
                     <td>{record.serviceType === 'ELECTRICITY' ? 'จ่ายค่าไฟ' : 'รับโอนเงิน'}</td><td>{record.bank || record.reference || '—'}</td><td>{record.staff}</td>
-                    <td>{baht(record.principal)}</td><td>{baht(record.fee)}</td>
+                    <td>{baht(record.principal)}</td><td>{baht(record.fee)}{Boolean(record.rounding) && <small>รวมปัดเศษ {baht(record.rounding!)}</small>}</td>
                     <td>{baht(record.cashReceived)}</td><td>{baht(record.change)}</td>
                     <td><span className={`badge ${record.cancelledAt ? 'danger' : 'success'}`}>{record.cancelledAt ? 'ยกเลิก' : 'สำเร็จ'}</span>{record.cancelReason && <small>{record.cancelReason}</small>}</td>
                   </tr>
@@ -6340,7 +6340,7 @@ export default function App() {
               </div>
               <div className="closing-metric-grid">
                 <div><span>ยอดค่าไฟ</span><strong>{baht(electricity.principal)}</strong></div>
-                <div><span>ค่าบริการ</span><strong>{baht(electricity.fee)}</strong></div>
+                <div><span>ค่าบริการรวมปัดเศษ</span><strong>{baht(electricity.fee)}</strong>{Boolean(electricity.rounding) && <small>รวมปัดเศษ {baht(electricity.rounding!)}</small>}</div>
                 <div><span>เงินสดรับ</span><strong>{baht(electricity.cash)}</strong></div>
                 <div><span>เงินทอน</span><strong>{baht(electricity.change)}</strong></div>
               </div>

@@ -31,9 +31,9 @@ export default function TaxDashboard({ api }: { api: string }) {
       ['เงินทอนจากโอน/ค่าไฟ', totals.change / 100],
       ['สถานะตรวจข้อมูล', data.review.reviewed ? 'ตรวจแล้ว' : 'รอตรวจ', data.review.note],
       [],
-      ['รหัสบันทึก', 'ประเภทบริการ', 'เวลาบันทึก (ไทย)', 'ผู้บันทึก', 'ธนาคาร', 'เลขอ้างอิง', 'ยอดโอน / ค่าไฟ', 'ค่าบริการ', 'รับสด', 'ทอน', 'หมายเหตุ', 'สถานะ', 'เหตุผลยกเลิก', 'เวลายกเลิก'],
+      ['รหัสบันทึก', 'ประเภทบริการ', 'เวลาบันทึก (ไทย)', 'ผู้บันทึก', 'ธนาคาร', 'เลขอ้างอิง', 'ยอดโอน / ค่าไฟ', 'ค่าบริการรวมปัดเศษ', 'ส่วนปัดเศษที่รวมแล้ว', 'รับสด', 'ทอน', 'หมายเหตุ', 'สถานะ', 'เหตุผลยกเลิก', 'เวลายกเลิก'],
       ...data.transfers.map((row) => [row.id, row.serviceType === 'ELECTRICITY' ? 'จ่ายค่าไฟ' : 'รับโอนเงิน', dateTime(row.createdAt), row.staff, row.bank, row.reference,
-        row.principal / 100, row.fee / 100, row.cashReceived / 100, row.change / 100, row.note,
+        row.principal / 100, row.fee / 100, (row.rounding ?? 0) / 100, row.cashReceived / 100, row.change / 100, row.note,
         row.cancelledAt ? 'ยกเลิก' : 'บันทึกแล้ว', row.cancelReason || '', row.cancelledAt ? dateTime(row.cancelledAt) : '']),
     ]);
   }
@@ -74,7 +74,7 @@ export default function TaxDashboard({ api }: { api: string }) {
       <section className="panel operation-panel">
         <div className="operation-title-row"><div><h2>หลักฐานโอนเงินและจ่ายค่าไฟ</h2><p>เงินสดรับ {baht(totals.cash)} · เงินทอน {baht(totals.change)}</p></div></div>
         {data.transfers.length ? <div className="operation-table tax-transfer-table"><table><thead><tr><th>เวลา / บริการ</th><th>ธนาคาร / เลขอ้างอิง</th><th>ยอดโอน / ค่าไฟ</th><th>ค่าบริการ</th><th>สถานะ</th></tr></thead>
-          <tbody>{data.transfers.map((row) => <tr key={row.id}><td>{dateTime(row.createdAt)}<small>{row.staff} · {row.serviceType === 'ELECTRICITY' ? 'จ่ายค่าไฟ' : 'รับโอนเงิน'}</small></td><td>{row.bank || '—'}<small>{row.reference || 'ไม่มีเลขอ้างอิง'}{row.note && ` · ${row.note}`}</small></td><td>{baht(row.principal)}</td><td>{baht(row.fee)}</td><td><span className={`badge ${row.cancelledAt ? 'danger' : 'success'}`}>{row.cancelledAt ? 'ยกเลิก' : 'บันทึกแล้ว'}</span>{row.cancelReason && <small>{row.cancelReason}</small>}</td></tr>)}</tbody>
+          <tbody>{data.transfers.map((row) => <tr key={row.id}><td>{dateTime(row.createdAt)}<small>{row.staff} · {row.serviceType === 'ELECTRICITY' ? 'จ่ายค่าไฟ' : 'รับโอนเงิน'}</small></td><td>{row.bank || '—'}<small>{row.reference || 'ไม่มีเลขอ้างอิง'}{row.note && ` · ${row.note}`}</small></td><td>{baht(row.principal)}</td><td>{baht(row.fee)}{Boolean(row.rounding) && <small>รวมปัดเศษ {baht(row.rounding!)}</small>}</td><td><span className={`badge ${row.cancelledAt ? 'danger' : 'success'}`}>{row.cancelledAt ? 'ยกเลิก' : 'บันทึกแล้ว'}</span>{row.cancelReason && <small>{row.cancelReason}</small>}</td></tr>)}</tbody>
         </table></div> : <p className="operation-empty">ยังไม่มีรายการโอน/ค่าไฟในเดือนนี้</p>}
       </section>
     </>}

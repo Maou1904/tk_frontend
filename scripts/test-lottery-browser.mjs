@@ -165,6 +165,10 @@ try {
   await fee.fill('20');
   await owner.page.getByLabel('เลขผู้ใช้ไฟ / เลขอ้างอิง (ถ้ามี)').fill('METER-QA');
   await owner.page.getByRole('button', { name: /สรุปรายการ/ }).click();
+  await owner.page.locator('.electricity-rounding-summary').waitFor();
+  assert.match(await owner.page.locator('.electricity-rounding-summary').innerText(), /123\.45/);
+  assert.match(await owner.page.locator('.electricity-rounding-summary').innerText(), /0\.55/);
+  assert.match(await owner.page.locator('.fee-ticket').first().innerText(), /144\.00/);
   await owner.page.getByRole('button', { name: 'ย้อนกลับ', exact: true }).click();
   assert.equal(await bill.inputValue(), '123.45');
   assert.equal(await fee.inputValue(), '20');
@@ -173,6 +177,11 @@ try {
   assert.equal(await saveElectricity.isEnabled(), false);
   await owner.page.getByRole('button', { name: '100 บาท', exact: true }).click();
   assert.equal(await saveElectricity.isEnabled(), false);
+  await owner.page.getByLabel('เงินสดที่รับจริง (บาท)').fill('143.45');
+  assert.equal(await saveElectricity.isEnabled(), false, 'The unrounded subtotal is insufficient');
+  await owner.page.getByRole('button', { name: 'รับพอดี', exact: true }).click();
+  assert.equal(await owner.page.getByLabel('เงินสดที่รับจริง (บาท)').inputValue(), '144.00');
+  assert.equal(await saveElectricity.isEnabled(), true);
   await owner.page.getByRole('button', { name: '200 บาท', exact: true }).click();
   assert.equal(await saveElectricity.isEnabled(), true);
   if (artifactDir) {
@@ -193,9 +202,11 @@ try {
   assert.equal(electricityWrites.length, 2);
   assert.deepEqual(electricityWrites[0].body, electricityWrites[1].body);
   assert.equal(electricityWrites[1].body.principal, 12345);
-  assert.equal(electricityWrites[1].body.fee, 2000);
+  assert.equal(electricityWrites[1].body.fee, 2055);
+  assert.equal(electricityWrites[1].body.rounding, 55);
   assert.equal(electricityWrites[1].body.cashReceived, 20000);
   assert.equal(electricityWrites[1].body.reference, 'METER-QA');
+  await owner.page.locator('.transaction-completion-change').getByText('฿56.00', { exact: true }).waitFor();
   assert.equal(await fee.inputValue(), '15.50');
   assert.equal(await bill.inputValue(), '');
   await ownerNav.getByRole('button', { name: 'ตั้งค่า', exact: true }).click();
@@ -210,6 +221,23 @@ try {
   await ownerNav.getByRole('button', { name: 'รับโอนเงิน', exact: true }).click();
   await owner.page.waitForFunction(() => document.querySelectorAll('.transfer-page .operation-form-grid input')[1]?.value === '10.00');
   await owner.page.getByText('ยังไม่มีรายการรับโอนในรอบนี้', { exact: true }).waitFor();
+  await owner.page.getByLabel('ยอดที่ลูกค้าต้องการโอน (บาท)').fill('123.45');
+  await owner.page.getByRole('button', { name: 'กสิกรไทย', exact: true }).click();
+  await owner.page.getByRole('button', { name: /สรุปรายการ/ }).click();
+  assert.equal(await owner.page.locator('.electricity-rounding-summary').count(), 0);
+  await owner.page.getByRole('button', { name: 'รับพอดี', exact: true }).click();
+  assert.equal(await owner.page.getByLabel('เงินสดที่รับจริง (บาท)').inputValue(), '133.45', 'Transfer still accepts satang without rounding');
+  await ownerNav.getByRole('button', { name: 'จ่ายค่าไฟ', exact: true }).click();
+  for (const [amount, serviceFee, expected] of [['123.45', '10', '134.00'], ['100.00', '10', '110.00'], ['100.01', '0', '101.00'], ['100.99', '0', '101.00'], ['123.45', '15.50', '139.00'], ['0.01', '0', '1.00']]) {
+    await bill.fill(amount); await fee.fill(serviceFee);
+    await owner.page.getByRole('button', { name: /สรุปรายการ/ }).click();
+    assert.match(await owner.page.locator('.fee-ticket').first().innerText(), new RegExp(expected.replace('.', '\\.')));
+    await owner.page.getByRole('button', { name: 'รับพอดี', exact: true }).click();
+    assert.equal(await owner.page.getByLabel('เงินสดที่รับจริง (บาท)').inputValue(), expected);
+    await owner.page.getByRole('button', { name: 'ย้อนกลับ', exact: true }).click();
+    assert.equal(await bill.inputValue(), amount, 'The original utility bill is retained');
+    assert.equal(await fee.inputValue(), serviceFee, 'The configured fee never accumulates rounding');
+  }
   await owner.context.close();
   assert.deepEqual(errors, []);
   console.log('PASS: staff see four menus, submit lottery orders without approval controls; lottery keypad validates cash and all shortcuts; owner approves in popup; reset appears only in stock and review requires re-confirmation after stock changes. Electricity keypad, fees, back navigation, underpayment, safe retries and independent settings passed. All APIs mocked.');

@@ -190,11 +190,11 @@ try {
     if (artifactDir) await page.screenshot({path:`${artifactDir}/cash-enter-${width}.png`});
   }
   await exactCash.click();
-  assert.equal(await page.getByLabel('เงินสดที่รับจริง (บาท)').inputValue(),'143.45');
+  assert.equal(await page.getByLabel('เงินสดที่รับจริง (บาท)').inputValue(),'144.00');
   await page.getByRole('button',{name:'200 บาท',exact:true}).click();
   await page.locator('.cash-dial').getByRole('button',{name:'0',exact:true}).focus();
   await page.keyboard.press('Enter');
-  await page.locator('.transaction-completion-change').getByText('฿56.55',{exact:true}).waitFor();
+  await page.locator('.transaction-completion-change').getByText('฿56.00',{exact:true}).waitFor();
   assert.equal(await page.evaluate(() => window.checkoutAudioTest.length), 2, 'Keyboard Enter completion also sounds');
   const noticeBox=await page.locator('.transaction-completion').boundingBox();
   const viewport=page.viewportSize();
